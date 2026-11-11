@@ -1,90 +1,122 @@
-# Analysis of Squamous Lung Cell Carcinoma Progression
+# lusc-atlas — single-cell + spatial analysis of lung squamous cell carcinoma
 
-## Overview
+Reproducible pipeline that integrates two curated lung single-cell atlases (**HLCA** and **LuCA**) with a
+**10x Visium** section of lung squamous cell carcinoma (**LUSC**) to characterise malignant cell states,
+the tumour microenvironment, and how they are organised in tissue.
 
-This repository contains code and data for the project titled "Analysis of Squamous Lung Cell Carcinoma Progression Using an Integrative Bioinformatics Approach." This study integrates single-cell RNA sequencing and spatial transcriptomics to provide a detailed understanding of the heterogeneity of squamous lung cell carcinomas.
+> **v2.0.0** is a ground-up rewrite of the 2024 course project (tag [`v1.0.0`](../../tree/v1.0.0)).
+> Every change, and the reason for it, is recorded in **[DEVELOPMENT_LOG.md](DEVELOPMENT_LOG.md)**.
 
-### Authors
-- Archana Balasubramanian
-- Shivaramakrishna Srinivasan
-- Aaryan Sharma
-- Aathira Sarath Chandran
-- Hersh Gupta
+## What it does
 
-## Repository Structure
+```
+ HLCA (healthy reference) ─┐
+                           ├─ dedupe + harmonise ─ per-sample QC ─ integration benchmark ─ inferCNV ─┬─ pseudobulk DE + pathways
+ LuCA (45 LUSC donors) ────┘   (§3.3 A–E)          + doublets       scVI/scANVI/sysVI/      malignant  ├─ composition (scCODA, Milo)
+                                                                     Harmony → choose          calls    ├─ trajectory (Palantir + CellRank 2)
+                                                                                                         └─ cell–cell communication (LIANA+)
+ Visium FFPE section ─ QC ─ cell2location (reference = annotated sc data) ─ SVGs, neighbourhoods, CellCharter niches, spatial LR
+```
 
-- `data/`: Contains the datasets used for the analysis, including single-cell RNA sequencing data and spatial transcriptomics data. Access the data files via the provided [Google Drive link](https://drive.google.com/drive/folders/1DLSwo194McYE81v2Zl5NL9aBTAZiGFsP?usp=sharing)
-- `Analysis of Squamous Lung Cell Carcinoma Progression Using an Integrative Bioinformatics Approach.pdf`: Detailed PDF report encompassing in-depth analysis, findings, and results from the project. The report provides comprehensive insights into the analysis process and outcomes.
-- Run the individual Jupyter Notebooks for analysis
-  
+| Question | Method (v2) | Replaces (v1) |
+|---|---|---|
+| Which cells are malignant? | infercnvpy vs healthy-epithelium null; chr3q check | — (not done) |
+| What changes in each cell type? | Pseudobulk PyDESeq2, paired tumour vs adjacent-normal | cell-level Wilcoxon (pseudoreplication) |
+| Which pathways / TFs? | decoupler 2 — PROGENy, CollecTRI, Hallmark | GSEA with cells as samples |
+| Composition shifts? | scCODA (compositional), Milo (neighbourhoods) | — |
+| Basal → malignant axis? | Palantir + CellRank 2 (CytoTRACE + pseudotime kernels) | PAGA graphs |
+| Where are cells in tissue? | cell2location deconvolution, CellCharter niches | Scanorama + cosine label per spot |
+| Who talks to whom, and what changes? | LIANA+ per sample, differential CCC, Tensor-cell2cell, spatial bivariate | LIANA on tumour cells only |
+
+## Quick start
+
+All environments are pinned in `pixi.lock` ([pixi](https://pixi.sh)).
+
+```bash
+pixi install --all                    # default (analysis), c2l (cell2location), workflow (Snakemake)
+pixi run test                         # fast unit tests
+
+# Option A — Snakemake (incremental, resumable, cluster-ready)
+pixi run -e workflow smk-dry          # show the plan
+pixi run -e workflow smk              # run everything
+
+# Option B — plain Python (same steps, same outputs)
+pixi run python scripts/run_all.py --dry-run
+pixi run run-all
+pixi run python scripts/run_all.py --only qc integrate --force
+```
+
+Both runners are generated from the same step declarations (`src/lusc_atlas/steps.py`), so they cannot
+diverge. Each step can also be run directly: `pixi run lusc-atlas <step>` (`pixi run lusc-atlas list`).
+
+**Resources:** CPU-only is fine (developed on 16 cores / 125 GB RAM, no GPU). Raw data ≈ 40 GB.
+**Outputs:** `results/tables/*.csv`, `results/figures/*.png`, `results/reports/summary.md`,
+`data/processed/*.h5ad`, `data/processed/visium.spatialdata.zarr`, per-step provenance in
+`results/reports/provenance/`.
+
 ## Data
 
-### Single-cell RNA Sequencing Data
+All inputs are downloaded by the pipeline from pinned, public sources and checksum-verified.
 
-The single-cell RNA sequencing data for this project were obtained from the Human Cell Atlas database, including the following sources:
+| Data | Source | Version |
+|---|---|---|
+| Human Lung Cell Atlas, core + extended (Sikkema et al. 2023, *Nat Med*) | CELLxGENE Census | `2025-11-08` |
+| Single-cell Lung Cancer Atlas, extended (Salcher et al. 2022, *Cancer Cell*) | CELLxGENE Census | `2025-11-08` |
+| Visium CytAssist FFPE human lung cancer (squamous) | 10x Genomics public dataset | 2.0.1 |
+| GENCODE v44 basic annotation | EBI | v44 |
 
-- Barbry_unpubl: Nasal and tracheobronchial samples from Nice University Hospital (Dec 2020). Processed with Cell Ranger 6.0.0 and Scanpy.
-- Schiller_2021: Tumor-free lung samples from Asklepios Fachkliniken München-Gauting. Processed with Cell Ranger 3.1.0.
-- Duong_lungMAP_unpubl: Postmortem lung samples from University of Rochester. Processed with Cell Ranger 3, analyzed with Pagoda2 and Seurat.
-- Jain_Misharin_2021: Nasal epithelial samples from Northwestern Medicine. Processed with Cell Ranger 3.1.0 and Seurat.
-- Schultze_unpubl: Normal lung tissues from Hannover Medical School. Processed with Seq-Well and Seurat v3.2.
-- These datasets provide a comprehensive view of lung tissue characteristics and were processed using state-of-the-art bioinformatics pipelines.
+Why both atlases: HLCA contains only 3 LUSC donors from a single study, so it cannot support a
+tumour-vs-normal comparison alone. LuCA contributes 45 LUSC donors across studies. HLCA remains the
+healthy-lung reference. Merging them safely (deduplication, gene space, label crosswalk, nested batches,
+over-correction checks) is described in [DEVELOPMENT_LOG §3.3](DEVELOPMENT_LOG.md#33--merging-two-atlases--what-can-go-wrong-and-what-we-do-about-it).
 
-### Spatial Transcriptomics Data
+## Results (first complete run, 2026-11-10)
 
-The spatial transcriptomics dataset originates from human lung cancer tissue samples diagnosed as squamous cell carcinoma, acquired from Avaden Biosciences by 10x Genomics. 
+Full auto-generated report: [`results/reports/summary.md`](results/reports/summary.md) (results are not
+committed; regenerate with `pixi run lusc-atlas report`). Interpretation and caveats:
+[DEVELOPMENT_LOG §3.4–3.10](DEVELOPMENT_LOG.md#34--qc--doublets--per-sample-both-conditions--resolves-s2-s6).
 
-- Preservation: FFPE method for long-term storage.
-- Preparation: Followed Visium CytAssist Spatial Gene Expression for FFPE protocol (CG000518).
-- Sectioning: Tissue sliced into 5 µm sections.
-- Staining: H&E staining after deparaffinization.
-- Imaging: Olympus VS200 Slide Scanning Microscope.
-- Processing: Included coverslipping, decoverslipping, dehydration, and decrosslinking.
-- Analysis: Analytes transferred to a Visium CytAssist Spatial Gene Expression slide.
-- Sequencing: Libraries prepared per Visium CytAssist Reagent Kits for FFPE User Guide (CG000495) and sequenced on an Illumina NovaSeq platform.
+| Stage | Result |
+|---|---|
+| Cohort | 249,402 cells from 160 donors, 20 studies (HLCA: 119 healthy + 3 LUSC; LuCA: 38 LUSC; 15 LUSC donors have paired adjacent-normal tissue); 0 cross-atlas duplicate studies |
+| QC | 231,504 cells kept across 215 samples (per-sample MAD; 672 Scrublet ∧ SOLO doublets) |
+| Integration | 7 embeddings benchmarked with scib-metrics; **scANVI** chosen (total 0.677 vs sysVI 0.663, scVI 0.641, Harmony 0.637, unintegrated PCA 0.564; zero-shot Geneformer 0.385) |
+| Malignant cells | 3,942 CNV-called (chr3q score 9× healthy epithelium); 99.9 % agree with author labels, but conservative (13 % of author-labelled malignant cells) |
+| Pseudobulk DE | paired tumour vs adjacent-normal: 9,665 significant gene × cell-type results across 15 cell types, strongest in macrophages, neutrophils and T cells |
+| Trajectory | Palantir/CellRank 2: Malignant cells sit further from healthy basal cells (median pseudotime 0.67 vs 0.55) |
+| Spatial | 6,191 Visium spots deconvolved into 27 cell types; 3 CellCharter niches (tumour-epithelial, immune–stromal, fibro-muscular) |
+| Cell–cell communication | Tumour-enriched neutrophil VEGFA/PLAU signalling and the TIGIT–NECTIN2 checkpoint axis; Tensor-cell2cell rank 5; spatial ECM → CD44/LRP1 co-expression |
 
-This dataset reveals the spatial distribution of gene expression within lung cancer tissues, providing insights into squamous cell carcinoma progression and informing therapeutic strategies. 
-Key metrics include the number of spots detected, median genes per spot, and median UMI counts per spot.
+**Known issues** being fixed before `v2.0.0` is tagged ([§3.10](DEVELOPMENT_LOG.md#310--post-run-review--open-issues-2026-11-11)):
+Milo tested the wrong contrast. ~25k CNV-low author-labelled tumour cells sit in the `Unknown` label, which
+affects scCODA and the `Unknown` rows of DE/CCC. A 66-cell rare-epithelial reference absorbs tumour signal in
+cell2location.
 
-### Prerequisites
+## Repository layout
 
-Ensure you have the following software and libraries installed:
-- Python (>=3.6)
-- Scanpy
-- Squidpy
-- LIANA
-- Other dependencies 
+```
+config/config.yaml        every parameter, path, version and checksum (single source of truth)
+config/label_crosswalk.csv HLCA ↔ LuCA cell-type mapping to a harmonised level
+src/lusc_atlas/           analysis package — one module per stage, `steps.py` wires I/O
+workflow/Snakefile        Snakemake rules generated from steps.py
+scripts/run_all.py        sequential runner (same steps)
+tests/                    unit tests on synthetic data (CI)
+legacy/v1/                original notebooks (outputs stripped; originals in tag v1.0.0)
+docs/v1_report.pdf        original project report
+```
 
-### Running the Analysis
+## Limitations
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/archana-b24/sc-spatial-analysis.git
-   cd sc-spatial-analysis
+- One Visium section: spatial results are descriptive (n = 1).
+- Atlas data are processed counts; ambient RNA cannot be removed without raw droplet matrices.
+- Malignant calls are CNV-based; samples with few CNVs may be under-called.
+- Pseudotime across donors describes transcriptional distance from healthy basal cells, not lineage.
 
-2. **Run the Jupyter Notebooks for analysis:**
+## Authors
 
-- Data Filtering: 01_dataFiltering.ipynb
-Filters raw single-cell RNA sequencing data to remove low-quality cells and genes.
+Archana Balasubramanian, Shivaramakrishna Srinivasan, Aaryan Sharma, Aathira Sarath Chandran, Hersh Gupta.
 
-- Doublet Removal: 02_doublet_removal.ipynb
-Identifies and removes doublets (artificially merged cells) from the dataset.
+## Citation
 
-- Main Analysis: 03_analysis.ipynb
-Conducts primary analysis including normalization, clustering, and initial exploratory data analysis of single-cell data.
-
-- Trajectory Analysis: 04_trajectory.ipynb
-Investigates cellular trajectories and differentiation paths.
-
-- Data Integration: 05_integration.ipynb
-Integrates single-cell datasets with spatial data to uncover intricate cellular interactions and spatial organization within the tissues.
-
-- Ligand-Receptor Interaction Analysis: 06_liana.ipynb
-Analyzes cell-cell communication through ligand-receptor interactions using the LIANA package.
-
-- Gene Set Enrichment Analysis: 07_GSEA.ipynb
-Performs gene set enrichment analysis to identify significantly enriched biological pathways.
-
-## Note:
-Feel free to explore the repository, access the data, and review the analysis report to gain a thorough understanding of the "Analysis of Squamous Lung Cell Carcinoma Progression Using an Integrative Bioinformatics Approach." 
-If you have any questions or require further information, don't hesitate to reach out.
+See [`CITATION.cff`](CITATION.cff). Please also cite the HLCA, LuCA and the methods listed in the
+development log.

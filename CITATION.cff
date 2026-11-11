@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below, and cite the HLCA, LuCA and method papers listed in DEVELOPMENT_LOG.md."
+title: "lusc-atlas: reproducible single-cell and spatial analysis of lung squamous cell carcinoma"
+version: 2.0.0
+type: software
+repository-code: "https://github.com/archana-b24/sc-spatial-analysis"
+authors:
+  - given-names: Archana
+    family-names: Balasubramanian
+  - given-names: Shivaramakrishna
+    family-names: Srinivasan
+  - given-names: Aaryan
+    family-names: Sharma
+  - given-names: Aathira
+    family-names: Sarath Chandran
+  - given-names: Hersh
+    family-names: Gupta
+references:
+  - type: article
+    title: "An integrated cell atlas of the lung in health and disease"
+    authors: [{family-names: Sikkema, given-names: L.}]
+    journal: Nature Medicine
+    year: 2023
+    doi: 10.1038/s41591-023-02327-2
+  - type: article
+    title: "High-resolution single-cell atlas reveals diversity and plasticity of tissue-resident neutrophils in non-small cell lung cancer"
+    authors: [{family-names: Salcher, given-names: S.}]
+    journal: Cancer Cell
+    year: 2022
+    doi: 10.1016/j.ccell.2022.10.008

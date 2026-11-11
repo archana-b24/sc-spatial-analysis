@@ -1,0 +1,399 @@
+# Development Log — v2.0.0
+
+> Living record of **what** changed between v1 and v2, **why** it changed, and **where** it lives.
+> Every entry is written so a reviewer can audit a decision without reading the code.
+> Newest decisions are appended inside each section; the [Timeline](#timeline) at the bottom is chronological.
+
+| | |
+|---|---|
+| **Baseline** | tag `v1.0.0` — original BENG207 course notebooks (Feb–May 2024), preserved byte-for-byte |
+| **Working branch** | `v2-dev` |
+| **Target** | tag `v2.0.0` — reproducible pipeline + corrected science with current (2025–26) methods |
+| **Next** | v3 — AI-native layer (Claude Skills / agent interface) — see [§4](#4-looking-ahead-v3--ai-native) |
+| **Long-running jobs** | tmux session `lusc-v2` (windows: `main`, `env`, `pipeline`) — `tmux attach -t lusc-v2` |
+| **Storage rule** | Everything (envs, caches, temp, data) lives on `/home/abalasubramanian/storage`; `source ../storage_env.sh` first (see §2.3) |
+
+Status legend: ✅ done · 🚧 in progress · ⏳ planned · ❌ dropped (with reason)
+
+---
+
+## 0. Audit of v1 (why v2 exists)
+
+The v1 audit (2026-11-09) found three classes of problems. Each v2 entry below references the issue ID it resolves.
+
+### Reproducibility breaks
+| ID | Problem in v1 | Evidence |
+|---|---|---|
+| R1 | Notebooks do not chain: files are read that no notebook writes | `03` reads `data/sclcCells.h5ad` but `02` writes `sclcSinglets.h5ad` → **doublet removal never reached downstream analysis**; `05`/`06` read `sclcHV.h5ad` (never created); `07` reads `sclcSingletwGenes.h5ad`, `normalCellsOld.h5ad`, uses undefined `sclcCells_1` |
+| R2 | Hardcoded / inconsistent paths | `/Users/shivaramakrishna/...`, `hlca/` vs `data/`, `BENG207/...` |
+| R3 | Saved errors & stubs | 11 cells with tracebacks; `04_trajectory` is 3 cells referencing undefined objects |
+| R4 | No environment specification | Python 3.9 and 3.11 mixed; `%pip install` inside notebooks; README says "Python ≥3.6" |
+| R5 | Manual data access | Google Drive link, no checksums, no provenance |
+| R6 | Repo bloat | 33 MB notebook outputs, 25 MB `.h5` tracked despite `.gitignore`, `.DS_Store` files, git pack 227 MB |
+
+### Scientific issues
+| ID | Problem in v1 | Consequence |
+|---|---|---|
+| S1 | "SCLC" used for *squamous* cell lung carcinoma | SCLC conventionally = **small**-cell lung cancer. Squamous = **LUSC**. Misleading to any reader |
+| S2 | Control QC used tumour threshold (`upper_lim` instead of `upper_lim_ctrl`) | Control cells filtered with wrong cutoff |
+| S3 | Cell-level Wilcoxon / t-test tumour-vs-normal DE | Pseudoreplication — cells from the same donor are not independent; p-values badly inflated |
+| S4 | GSEA with `permutation_type='phenotype'` using cells as samples | Same pseudoreplication problem in pathway statistics |
+| S5 | No batch / study correction across HLCA studies | Tumour and normal come from different studies → condition confounded with batch |
+| S6 | Doublets called on tumour only, without batch key | Asymmetric QC between conditions |
+| S7 | No malignant-cell identification | "Progression" cannot be studied without separating malignant from normal epithelium |
+| S8 | Trajectory = PAGA graphs only | No pseudotime / fate inference |
+| S9 | Visium "integration" = Scanorama + cosine label transfer | Visium spots (55 µm) contain multiple cells — requires deconvolution, not 1:1 labels |
+| S10 | No spatial statistics | No SVGs, neighbourhood enrichment, niches, spatial CCC |
+| S11 | LIANA on tumour only | No differential (tumour vs normal) communication |
+| S12 | Deprecated tools | `diffxpy` (unmaintained), legacy `decoupler`/`liana` APIs |
+
+### Engineering gaps
+| ID | Gap |
+|---|---|
+| E1 | No package / functions duplicated across notebooks |
+| E2 | No tests, no CI |
+| E3 | No LICENSE, CITATION, CHANGELOG, versioning |
+| E4 | No workflow manager / single entry point |
+
+---
+
+## 1. Architecture
+
+### 1.1 ✅ Preserve v1, then restructure — *resolves R6, E3*
+- **What:** Tagged current `main` as `v1.0.0`; moved all v1 notebooks to `legacy/v1/` (outputs stripped), v1 report to `docs/v1_report.pdf`; untracked `.DS_Store`, Space Ranger CSVs, `.h5`, result CSVs.
+- **Why:** v2 rewrites nearly everything. A tag gives an immutable, citable reference for "what v1 did" so we can strip, move and delete freely without losing history. Stripped legacy notebooks keep the code readable while dropping ~50 MB of embedded images.
+- **Not done (needs sign-off):** rewriting git history to purge the 227 MB pack. Requires a force-push to `origin` and coordination with co-authors.
+
+### 1.2 ✅ Layout: package + generated runners
+```
+sc-spatial-analysis/
+├── config/config.yaml          # every path, threshold, seed — single source of truth
+├── src/lusc_atlas/             # importable package: all analysis logic lives here
+├── workflow/                   # Snakemake: Snakefile + rules/*.smk + envs/
+├── scripts/run_all.py          # dependency-free sequential runner (same steps as Snakemake)
+├── notebooks/                  # thin, narrative notebooks that only call the package and plot
+├── tests/                      # unit tests + tiny synthetic fixtures for CI
+├── data/{raw,interim,processed}/  # never committed; created by the fetch step
+├── results/{tables,figures,reports}/
+├── legacy/v1/                  # frozen v1 code for comparison
+└── docs/
+```
+- **Why package + thin orchestrators:** v1 duplicated logic across notebooks, and they drifted (R1). With one function per analysis step, Snakemake, `run_all.py`, notebooks and tests all call the *same* code — two runners cannot disagree.
+- **Why both Snakemake and `run_all.py`:** Snakemake gives incremental re-runs, provenance and cluster execution; `run_all.py` is the zero-learning-curve path for someone who just wants `python scripts/run_all.py`. Both read `config/config.yaml`.
+- **How they stay identical:** `src/lusc_atlas/steps.py` declares each step's `INPUTS`, `OUTPUTS` and pixi `ENV`. The Snakefile *generates* one rule per step from those declarations; `run_all.py` iterates the same `ORDER` and skips steps whose declared outputs exist. A unit test asserts every input is produced by an earlier step — the exact failure that broke v1 (R1).
+- **Provenance:** every step writes `results/reports/provenance/<step>.json` (runtime, Python, package versions, sha256 of the resolved config).
+
+| Step | Env | Purpose |
+|---|---|---|
+| `fetch_visium` | default | 10x download + sha256 + extract |
+| `fetch_atlases` | default | HLCA + LuCA source h5ads from pinned Census; size + sha256 |
+| `select` | default | two-atlas dedup, conditions, count check, gene space, labels, caps (§3.3) |
+| `qc` | default | per-sample MAD QC + Scrublet ∧ SOLO doublets |
+| `integrate` | default | PCA / Harmony / scVI / scANVI / sysVI → scib benchmark + guard → choose |
+| `cnv` | default | infercnvpy malignant calls, chr3q control, author-label concordance |
+| `de` | default | pseudobulk PyDESeq2 contrasts + decoupler pathways/TFs |
+| `abundance` | default | scCODA + Milo |
+| `trajectory` | default | Palantir + CellRank 2 on Basal → Malignant |
+| `spatial_prep` | default | Visium QC/clustering + SpatialData export |
+| `deconvolve` | **c2l** | cell2location reference signatures + spot mapping |
+| `spatial` | default | SVGs, neighbourhood enrichment, CellCharter niches |
+| `ccc` | default | LIANA+ by sample, differential, Tensor-cell2cell, spatial bivariate |
+| `report` | default | figures + `results/reports/summary.md` from outputs only |
+
+---
+
+## 2. Reproducibility
+
+### 2.1 ✅ Long-running work in tmux
+- Session `lusc-v2`: `main` (interactive), `env` (environment builds), `pipeline` (pipeline runs). Survives SSH disconnects; attach with `tmux attach -t lusc-v2`.
+
+### 2.2 ✅ Data acquisition with provenance — *resolves R5*
+
+| Source | Pinned version | Size | How it is verified |
+|---|---|---|---|
+| HLCA core+extended (Sikkema 2023) | CELLxGENE Census `2025-11-08` (stable/LTS), dataset `9f222629-…` | 21.9 GB | byte size = S3 `Content-Length`; sha256 recorded in `data/raw/hlca/provenance.json` |
+| LuCA extended (Salcher 2022) | Census `2025-11-08`, dataset `1e6a6ef9-…` | 17.6 GB | same |
+| Visium CytAssist FFPE lung SCC | 10x public release **2.0.1** | 64 MB + 34 MB | sha256 pinned in `config/config.yaml` |
+| GENCODE v44 basic GTF | EBI FTP | — | gene positions for inferCNV |
+
+- **Finding:** the v1 Visium matrix (`sclcVisiumFiltered.h5`, 25 MB) is **not** byte-identical to the official 10x release (64 MB; different sha256; v1 also used the older `tissue_positions_list.csv` layout). v2 uses the official release as the canonical, publicly verifiable source; the v1 file remains in tag `v1.0.0` for comparison only.
+- 10x's `2.0.0` path returns HTTP 403 to scripted clients; the `2.0.1` path is public.
+- **Why pinned Census releases:** "latest" changes monthly; a pinned LTS build means the same cells, same metadata, forever.
+
+### 2.3 ✅ Pinned environments (pixi) — *resolves R4*
+
+- **Incident (2026-11-09):** the first env build (conda, in `~`) filled the 250 GB root volume. Rule since then: **all** envs, package caches, temp files and data live on `/storage`. `storage_env.sh` (one level above the repo) exports `PIXI_HOME`, `PIXI_CACHE_DIR`, `UV_CACHE_DIR`, `PIP_CACHE_DIR`, `CONDA_PKGS_DIRS`, `TMPDIR`, `MPLCONFIGDIR`, `NUMBA_CACHE_DIR`, `XDG_CACHE_HOME`. Every tmux window sources it.
+- **Why pixi** (over conda + `environment.yml`): one manifest (`pixi.toml`) + one lockfile (`pixi.lock`) for several *isolated* environments, conda and PyPI resolved together, and exact reproduction with `pixi install --frozen`.
+
+| Env | Python | Purpose | Why separate |
+|---|---|---|---|
+| `default` | 3.13 | the whole analysis | pertpy 1.5 requires ≥ 3.13 |
+| `c2l` | 3.12 | cell2location only | needs scvi-tools 1.3.x + pyro < 1.9.2; main stack uses scvi-tools 1.5 |
+| `workflow` | 3.13 | Snakemake only | orchestrator must not share deps with analysis (see conflicts) |
+
+Conflicts found and how they were resolved (each was a real solver failure):
+
+| Conflict | Resolution |
+|---|---|
+| `pygpcca` (← cellrank) hard-pins `jinja2==3.0.3`; conda-forge `pytorch` and `snakemake` need `jinja2≥3.1` | torch from the PyPI **CPU** wheel index; snakemake in its own env |
+| `cellcharter 0.3.9` needs `scipy≥1.18`; `pygam` (← cellrank) needs `scipy<1.17` | cellcharter left floating → solver picks 0.3.7 |
+| `snakemake 9.27` needs `packaging<26`; scanpy env had 26.3 | resolved by moving snakemake out (above) |
+| `cell2location 0.1.5` has no upper bound on scvi-tools and breaks on 1.5 | `c2l` env pins `scvi-tools>=1.3,<1.4` |
+| `pyro-ppl 1.9.2` removed `deep_getattr` used by cell2location | `c2l` env pins `pyro-ppl<1.9.2` |
+
+Verification: `scripts/check_env.py` imports every package in each env (all pass).
+
+Missing optional extra found by the full run (2026-11-10): `pertpy` imports cleanly without JAX, but `pt.tl.Sccoda()` raises `ImportError` at call time — scCODA's NUTS sampler needs the `[jax]` extra (numpyro, flax, optax, ott-jax). `check_env.py` could not catch this because it only imports packages. Fix: `pertpy = { version = ">=1.5", extras = ["jax"] }`; reinstalling left torch, scanpy, numpy, scipy and anndata on the same versions. Lesson for `check_env.py`: also instantiate tools whose dependencies are loaded lazily.
+
+Two more found by the resumed run (2026-11-10):
+- **`tabulate` missing**: `report` uses `DataFrame.to_markdown()`, which needs the optional dependency `tabulate`. It was never exercised because the smoke test stops before `report`. Added to `pixi.toml`; nothing else changed.
+- **LIANA+ API drift (1.x → 2.x)**: `pixi.toml` already required `liana>=2.1.1`, but `ccc.py` was written against the 1.x API (`li.multi.*`, `li.ut.*`), which 2.x reorganised. Decision: **port to 2.x, not pin to 1.x**. The manifest already chose 2.x, 1.x is no longer developed, and pinning back risks new conflicts with the Python 3.13 stack. Mapping: `li.multi.df_to_lr` → `li.mt.df_to_lr` (now expects the DE table *indexed by gene* with the groupby column, which the old code did not supply); `li.multi.to_tensor_c2c` → `li.ms.to_tensor_c2c` (`inverse_fun` → `inverse_fn`, whose default changed to −log10, so `1 − x` stays explicit); `li.ut.spatial_neighbors` → `li.pp.spatial_neighbors`. Lesson: as with scCODA above, import checks can't catch API drift. Only exercising a step does, so `ccc` and `report` should join the smoke test (v2.1).
+
+### 2.4 ✅ Notebook & repo hygiene — *resolves R6*
+`.pre-commit-config.yaml`: **nbstripout** (outputs can no longer be committed), **ruff** lint + format, `check-added-large-files` (2 MB) so data cannot re-enter git. Data/results directories are git-ignored.
+
+### 2.5 ✅ Tests + CI — *resolves E2*
+`tests/` runs in ~1 s on synthetic data — no downloads, no training. What is tested is chosen by *what would silently corrupt results*: DAG wiring (R1), per-sample QC (S2), design collinearity and paired blocking (S3/S5), the over-correction guard, chr3q window mapping, duplicate-study detection, origin import, raw-count detection, stratified caps, checksums. `.github/workflows/ci.yml` runs lint, tests, the Snakemake dry-run and the `run_all` plan with `pixi install --frozen`.
+
+### 2.6 ✅ Resumable runs — a step is "done" only if it finished cleanly
+**Problem.** `run_all.py` originally skipped a step whenever its declared output files existed. That would have caused two silent failures on resume:
+1. *Truncated outputs:* a step killed while writing an `.h5ad` or CSV leaves a file that exists but is incomplete. Resume would skip the step, and every later step would read corrupt data.
+2. *Stale outputs:* outputs from an older run (e.g. before a config or code change) are treated as current.
+
+This matters here because the pipeline runs unattended for 20+ hours (`deconvolve` alone took 10.6 h on the full data), so being interrupted and resumed is the normal case.
+
+**Fix (two independent layers):**
+
+| Layer | Where | What it guarantees |
+|---|---|---|
+| Atomic writes | `steps._write_table`, `steps._write_h5ad` | write to `.<name>.partial<ext>` in the same directory, then `os.replace()`. On one filesystem the rename is atomic, so a declared output is always either complete or absent. |
+| Completion stamps | `scripts/run_all.py` | `logs/run_all/.done/<step>` is **deleted when the step starts** and **written only after exit code 0** (it records the timestamp and runtime). `done(step)` = stamp exists **and** all declared outputs exist. A crash, kill or non-zero exit therefore always means re-run. |
+
+- `--adopt STEP …` stamps steps whose outputs were produced before stamps existed. It refuses if any output is missing. It was used once (2026-11-10) for the 12 steps that had completed in the first full run, each checked against its ✓ line in `logs/run_full.log` or a traceback-free step log. It is never needed for new runs.
+- `--force` still re-runs regardless, and `--dry-run` shows the plan using the same logic.
+- The **Snakemake** path is unchanged: Snakemake already marks a job's outputs as incomplete when the job fails or is killed, and re-runs it. The atomic writes protect that path too.
+- Run logs are appended to (`tee -a logs/run_full.log`, with a `=== resume <timestamp>` header), so the history of a multi-session run stays in one file.
+- Not covered: outputs written by third-party code straight to their final path (the `.npz` from `fm_embed`, cell2location's tables, the SpatialData `.zarr`). The stamp layer still protects these, since the step has to exit 0 for its stamp to be written.
+
+---
+
+## 3. Correct science
+
+Each entry: **v1 → v2**, **why**, **evidence/citation**.
+
+### 3.1 🚧 Naming: SCLC → LUSC — *resolves S1*
+All v2 code, files and figures say **LUSC** (lung squamous cell carcinoma). "SCLC" is reserved in the field for small-cell lung cancer.
+
+### 3.2 ✅ Cohort: HLCA alone cannot answer the question → HLCA + LuCA
+
+**Finding (2026-11-09, from the HLCA source h5ad):** HLCA's entire LUSC content is **3 donors from one study** (`Thienpont_2018`, i.e. Lambrechts et al. 2018), 20,631 cells, of which 84 % are immune and only ~1,950 epithelial (442 basal). No normal donor shares that study. v1's tumour-vs-normal comparison was therefore *n = 3 vs other studies' donors*, with condition perfectly confounded with study — a fact v1 never surfaced.
+
+**Decision (user, 2026-11-09):** combine **HLCA** (healthy-lung reference, 1.3 M normal cells, gold-standard harmonised annotation) with **LuCA extended** (Salcher 2022; 45 LUSC donors / 190 k LUSC cells across several studies, plus normal tissue). This turns an n = 3 anecdote into a multi-study cohort, at the cost of a cross-atlas integration problem that §3.3 treats explicitly.
+
+### 3.3 🚧 Merging two atlases — what can go wrong, and what we do about it
+
+Merging two curated atlases is *not* `anndata.concat`. Each atlas is itself an integration of many studies with its own processing, QC thresholds, gene annotation and cell-type ontology. The checklist below is the design; each item names the failure mode, how we detect it, and how we handle it.
+
+**A. Duplicated cells and donors (the silent killer).**
+- *Failure mode:* the same patients appear in both atlases (LuCA re-distributes public datasets that HLCA also contains). Duplicates (i) count one patient twice → pseudoreplication in donor-level statistics, and (ii) form a perfect artificial "batch" between identical cells that any integration method will happily "correct", **inflating integration metrics**.
+- *Evidence:* CELLxGENE flags `is_primary_data = False` on **360,842 LuCA cells** (incl. 8,373 LUSC cells) — they are copies of cells primary elsewhere. Donor-ID strings share **zero** overlap between atlases, so naive donor matching would miss every duplicate.
+- *Handling:* keep only `is_primary_data == True` cells per atlas, then build an explicit **study crosswalk** (`results/tables/merge_study_crosswalk.csv`) and assert that no study contributes donors from both atlases. Any study present in both is taken from exactly one atlas (the one whose annotation we rely on for that study).
+
+**B. Are the counts actually counts?**
+- *Failure mode:* atlases store `X` normalised and raw counts in `.raw`, but some contributing studies only deposited normalised or non-integer data (e.g. ambient-corrected). Count models (scVI, DESeq2, cell2location) silently mis-model non-integers.
+- *Handling:* per-study check that the matrix used is non-negative integer counts; studies failing the check are excluded and listed in the crosswalk with the reason.
+
+**C. Gene space.**
+- *Failure mode:* symbol-based joins break on renamed genes / GENCODE version drift; per-study gene filtering upstream makes "missing" look like "zero".
+- *Handling:* join on **Ensembl IDs (version stripped)**, never symbols; take the **intersection** of genes measured in both atlases for integration; respect CELLxGENE `feature_is_filtered`; report genes lost. (For Visium — a probe-based FFPE panel of ~18 k genes — cell2location uses the sc ∩ Visium intersection.)
+
+**D. Metadata harmonisation.**
+- Donor and sample IDs are namespaced by atlas (`HLCA:…`, `LuCA:…`).
+- One `condition` vocabulary: `tumour` (LUSC tumour tissue), `adjacent_normal` (non-tumour tissue from LUSC patients, LuCA `origin`), `healthy` (HLCA/LuCA normal donors). The v1 binary tumour/normal hid this distinction, which matters: adjacent-normal lung of a smoker with cancer is *not* healthy lung.
+- Tissue restricted to lung primary sites; lymph-node / effusion / metastasis samples excluded.
+
+**E. Cell-type labels are two different ontologies.**
+- *Failure mode:* HLCA `ann_finest_level` and LuCA `cell_type` / `cell_type_major` were built independently. Comparing fine labels across atlases without a crosswalk is meaningless; LuCA has tumour-specific states (e.g. tumour cells, TANs) that HLCA lacks.
+- *Handling:* an explicit, reviewed **label crosswalk** (`config/label_crosswalk.csv`) maps both schemes to one harmonised coarse level (anchored on Cell Ontology IDs, which both atlases carry). Fine labels are kept per atlas and never compared directly. A semi-supervised **scANVI** model uses the harmonised coarse label (unmapped → `Unknown`) and its predictions are checked against the original labels (confusion matrix per atlas).
+
+**F. Batch structure is nested and crossed.**
+- `sample ⊂ donor ⊂ study ⊂ atlas`, with `assay` (10x 3′ v1/v2/v3, 5′, BD Rhapsody, GEXSCOPE, inDrop, Seq-Well…) crossing studies.
+- *Choice:* `batch_key = sample` (the finest unit of technical variation), with `study` and `assay` as categorical covariates. **Not** `batch = atlas`: that is the coarsest grouping and would leave within-atlas study effects untouched while risking removal of biology that differs between atlases by design (HLCA ≈ healthy, LuCA ≈ tumour).
+
+**G. Which integration method, and how we decide.**
+- Candidates: **scVI** (Lopez 2018), **scANVI** (Xu 2021; label-aware, best bio-conservation in scIB), **sysVI** (Hrovatin et al., VampPrior + cycle-consistency; designed for *substantial* batch effects such as cross-technology/cross-atlas, built into scvi-tools ≥ 1.3), and **Harmony on PCA** as a classical baseline. Unintegrated PCA is the floor.
+- *Benchmark:* **scib-metrics** (Luecken 2022) on a stratified subsample — bio-conservation (cell-type ASW, NMI/ARI, isolated labels, cLISI) vs batch removal (iLISI, kBET, graph connectivity, PCR), computed with batch = study.
+- *Over-correction guard (the part most pipelines skip):* integration must not erase real biology. Checks: (i) malignant cells must not co-cluster with healthy epithelium; (ii) iLISI computed **within** each harmonised cell type (mixing of the same cell type across atlases is good, mixing of different types is not); (iii) known tumour-only states remain distinct.
+- *Decision rule:* the method with the best aggregate scIB score **that passes the over-correction checks** is used downstream; results of all candidates are kept in `results/tables/integration_benchmark.csv`.
+
+**H. Integration is for representation, not for statistics.**
+- The integrated latent space is used for neighbours, UMAP, clustering, label transfer, trajectories and Milo. **Differential expression always uses raw counts with batch terms in the model**, never batch-"corrected" expression (corrected values are not counts and their variance is distorted).
+- Primary DE contrast is **paired within donor**: LUSC tumour vs adjacent-normal from the *same* patients (`~ donor + condition`), which cancels donor and study effects by design. Tumour vs healthy (`~ study + assay + condition`) is a secondary, explicitly confounded-by-design sensitivity analysis.
+
+**I. Uniform reprocessing.**
+Both atlases were QC'd with different thresholds. v2 re-applies one per-sample MAD QC and per-sample doublet detection to every sample from both atlases (§3.4), so cell inclusion criteria are identical across the merged object.
+
+**J. Composition differences between atlases.**
+HLCA healthy lung is AT2/AT1/macrophage-rich; tumours are immune- and malignant-rich. Integration methods can mis-align non-overlapping populations; scANVI's label guidance and the over-correction checks (G) are the mitigations. Differential abundance is modelled compositionally (scCODA) rather than by comparing raw proportions.
+
+**K. Validation of the merge.**
+- Atlas mixing per harmonised cell type (should be high) vs across types (should be low).
+- Marker sanity per compartment in both atlases.
+- **Leave-one-study-out** DE: the sign of top tumour-vs-adjacent genes must be reproducible when any single study is removed.
+
+> **Results below come from the first complete run** (finished 2026-11-10 21:13 PST; every number is from `results/reports/summary.md` or `results/tables/`). The post-run review in [§3.10](#310--post-run-review--open-issues-2026-11-11) lists what the numbers revealed that still needs fixing. ⚠️ marks a result that depends on one of those issues.
+
+### 3.4 ✅ QC & doublets — per sample, both conditions — *resolves S2, S6*
+v1: global 98th-percentile cutoff, control filtered with the tumour threshold (bug), doublets on tumour only. v2: MAD outliers **per sample** (Heumos 2023), Scrublet + scVI-SOLO **per sample on every sample**, cell removed only when both agree.
+
+**Result:** 246,350 cells in → **231,504 kept** across **215 samples** (160 donors, 20 studies). 13,203 MAD outliers; 672 consensus doublets. The two doublet callers disagree strongly: SOLO flags 41,531 cells (17 %), Scrublet 2,082 (0.8 %), so the "both agree" rule effectively removes only what Scrublet finds (see §3.10 item 5).
+
+### 3.5 ✅ Malignant-cell calling (infercnvpy) — *resolves S7*
+v1: none. v2: inferCNV against immune/endothelial/stromal reference; threshold = 95th percentile of CNV score in healthy-donor epithelium; malignant = epithelial ∧ tumour sample ∧ above threshold; LUSC chr3q gain checked as a positive control.
+
+**Result:** threshold 0.0129; **3,942 malignant cells**. The chr3q positive control works: mean chr3q score is 0.039 in malignant cells vs 0.004 in healthy and adjacent-normal epithelium.
+
+| Check | Value | Reading |
+|---|---|---|
+| Precision vs author labels | 3,903 / 3,907 CNV calls with an author label are author-"malignant" (99.9 %) | calls are trustworthy |
+| Sensitivity vs author labels | 3,903 / 29,172 author-"malignant" cells called (13 %) | **very conservative** |
+| CNV-low tumour-sample epithelium | 27,577 cells, mean chr3q 0.025 (6× healthy) | many under-called malignant cells sit here |
+| Tumour donors with ≥ 1 / ≥ 10 malignant calls | 22 / 8 of 40 | malignant-cell analyses rest on few donors |
+
+⚠️ The 95th-percentile null is strict by design (false positives would contaminate the malignant signature), but at 13 % sensitivity the un-called malignant cells fall into the `Unknown` label and leak into other analyses (§3.10 item 2).
+
+### 3.6 ✅ DE, pathways, abundance — *resolves S3, S4, S5, S12*
+v1: cell-level Wilcoxon + phenotype-permutation GSEA with cells as samples (pseudoreplication). v2: pseudobulk per sample × cell type → PyDESeq2; decoupler 2.x PROGENy / CollecTRI / Hallmark on the Wald statistic; scCODA + Milo for abundance.
+
+**Result (padj < 0.05):**
+
+| Contrast | Design | Cell-type groups | Significant gene × group rows |
+|---|---|---|---|
+| `paired_tumour_vs_adjacent` (primary) | `~ donor + condition` | 15 | 9,665 |
+| `tumour_vs_healthy` (sensitivity, confounded by design) | `~ study + assay + condition` | 20 | 20,174 |
+| `malignant_vs_healthy_basal` | unpaired | 1 | 300 |
+
+In the paired contrast the strongest signal is in myeloid and lymphoid cells: Macrophage 2,038 genes (14 donor pairs), Neutrophil 1,652 (5), CD4 T 924 (11), Monocyte classical 753 (12), CD8 T 706 (12). No epithelial group is tested at all, because none has ≥ 10 cells in ≥ 3 samples per condition (`min_cells_per_pseudobulk`, `min_samples_per_condition`). This matches the earlier power note that adjacent-normal tissue holds few epithelial cells. The epithelial question is answered by `malignant_vs_healthy_basal` instead. ⚠️ `Unknown` (2,181 paired genes) is a mixed bucket and should not be interpreted (§3.10 item 2).
+
+**scCODA** (reference cell type chosen automatically = `Unknown`; credible = inclusion probability ≥ 0.8): relative to adjacent-normal, tumour samples have lower CD4 T, CD8 T, NK, Macrophage, Monocyte non-classical, AT1 and AT2 proportions, and no credible change in Malignant. Healthy donors have fewer CD4 T / CD8 T / NK / B / classical monocytes and more Multiciliated cells than adjacent-normal tissue. ⚠️ With `Unknown` (mostly un-called tumour cells) as the reference, these are shifts *relative to the tumour-cell bucket*. That explains why nearly everything goes down in tumour, so the direction must be read with care (§3.10 item 2).
+
+**Milo:** 17,511 neighbourhoods, **0 significant** (SpatialFDR < 0.1). ⚠️ This is a bug, not a null result: the wrong contrast was tested (§3.10 item 1).
+
+### 3.7 ✅ Trajectory — *resolves S8*
+v1: PAGA graphs, stub notebook. v2: Palantir pseudotime rooted in healthy basal cells + CellRank 2 (CytoTRACE + pseudotime kernels). Reported as transcriptional distance from normal basal (malignant cells are patient-clonal; not lineage tracing).
+
+**Result:** 10,093 cells (6,151 Basal, 3,942 Malignant); root = one HLCA healthy basal cell; CellRank terminal states: Malignant, Basal_1, Basal_2. Median pseudotime is 0.55 for Basal and 0.67 for Malignant, with a narrower spread for Malignant (SD 0.17 vs 0.28). Malignant cells sit further from healthy basal, as expected, but the distributions overlap widely.
+
+### 3.8 ✅ Spatial — *resolves S9, S10*
+v1: Scanorama + cosine label transfer (one label per multi-cell spot). v2: cell2location deconvolution (separate env), squidpy SVGs / neighbourhood enrichment, CellCharter niches, SpatialData export. n = 1 section → descriptive only.
+
+**Result:** 6,195 → **6,191 spots** kept (18,061 genes; median 66k UMIs, 10k genes per spot). cell2location ran for 10.6 h on CPU and estimated abundances for **27 harmonised cell types** per spot. CellCharter found **3 niches**: an epithelial/tumour niche (0), a mixed immune–stromal niche (1) and a fibroblast + smooth-muscle niche (2: Fibroblast 22 %, SMC/pericyte 41 %). Spatial bivariate LR is dominated by ECM → CD44/LRP1 pairs (FN1, collagens, CCN1/2, SERPING1; Moran's R 0.74–0.84). Moran's I is significant for 1,998 of the 2,000 genes tested, which is typical for Visium; genes are ranked by I rather than filtered by p.
+
+⚠️ **Rare epithelial** (only 66 healthy HLCA cells: ionocytes, neuroendocrine, brush cells) gets 66 % of niche 0 and 41 % of niche 1, while Malignant gets 11 % and 5 %. This is almost certainly a deconvolution artefact, not biology (§3.10 item 3), so per-type spatial abundances should not be quoted until it is fixed.
+
+### 3.9 ✅ Cell–cell communication — *resolves S11*
+v1: LIANA on pooled tumour cells only. v2: LIANA+ per sample in every condition, differential CCC from pseudobulk DE, Tensor-cell2cell programmes, spatial bivariate LR on Visium.
+
+Issues found in the first complete `ccc` run (2026-11-10) and their fixes:
+
+| Issue | Why it mattered | Fix |
+|---|---|---|
+| Sub-analyses wrapped in `try/except → log.warning` | the step "succeeded" with differential CCC and the tensor silently missing | every sub-analysis still runs, but any failure raises at the end of the step, so it gets no completion stamp (§2.6) |
+| Differential CCC filter used a stale group name (`Malignant_vs_normal_epithelium`) | the DE table holds two overlapping cell-type contrasts (`paired_tumour_vs_adjacent`, `tumour_vs_healthy`), giving 27k duplicate gene × group rows, so LR scores would have mixed paired and unpaired designs | explicit `ccc.de_contrast: paired_tumour_vs_adjacent` (the primary paired design, §3.6); `differential()` raises on duplicate gene × group rows |
+| Tensor built with `how="outer_cells"` over all 215 samples | that option intersects LR pairs across *all* samples. Only **1 of 3,159** LR pairs (`PKM^CD44`) is present in every sample, so all 8 factors were trivial. The step still exited 0 | `how="outer"`, which keeps cells and LR pairs present in ≥ `tensor_outer_fraction` (1/3) of samples, with missing entries set to 0. A guard raises on a degenerate tensor (< 50 LR pairs, < 3 cell types or < 10 samples) |
+| Tensor scope: 133 of 215 samples are healthy donors, and an `Unknown` label sat in 79 % of samples | the factors would mostly capture variation between healthy donors, not tumour vs normal | `ccc.tensor_conditions: [tumour, tumour_region_unknown, adjacent_normal]` (82 samples) and `tensor_exclude_labels: [Unknown]`. Result: 82 samples × 868 LR pairs × 10 senders × 10 receivers (user decision) |
+| Elbow rank search hard-coded to `upper_rank=12` | on the rescoped tensor each rank took longer than the last on CPU (rank 1: 11.5 min, rank 2: ~30 min; each rank = 10 random-init fits × ≤ 100 iterations, the cell2cell `regular` preset). Extrapolated, ranks 3–12 would take > 15 h, and the step had run 24 min before rescoping | new config `ccc.tensor_upper_rank: 8` (read in `ccc.py`). The rank is still chosen from the elbow of reconstruction error, so it stays data-driven, just over a shorter range. With 10 sender/receiver types, 8 factors is already about as many as can be interpreted one by one. Fits per rank left at 10: lowering them would mean calling `elbow_rank_selection` directly. **Rejected:** a fixed rank (subjective) and leaving 12 (≈ a day of compute for ranks that are unlikely to be picked). **Check after the run:** if the elbow lands at 8, the true optimum may be higher, so rerun with a higher ceiling on GPU or with fewer fits per rank (user decision, 2026-11-10) |
+
+Known limitation: **Malignant cells are not in the tensor.** Only ~4 % of per-sample LIANA results have ≥ `min_cells` (10) malignant cells, which is far below the 1/3 sample-presence cut. Malignant-cell communication is covered by the per-sample LIANA results and the spatial bivariate analysis instead. Options for v2.1: a tumour-only tensor with a lower `outer_fraction`, or a lower `min_cells` for Malignant.
+
+**Result (run finished 2026-11-10 21:12, `ccc` 5.3 h):**
+- **Elbow rank = 5**, below the ceiling of 8, so the shorter search did not cut off the optimum and no rerun is needed.
+- **Differential CCC** (paired tumour vs adjacent): the top interactions are neutrophil-derived VEGFA/PLAU signalling (→ CD44 on NK, PLAUR on macrophages) and the TIGIT–NECTIN2 checkpoint axis between CD4 T cells and macrophages/monocytes. CEACAM1 → HAVCR2 (TIM-3) on CD8 T cells also ranks in the top 20.
+- **Tensor factors** (82 samples × 868 LR pairs × 10 × 10): Factor 1 is macrophage/cDC-sender (antigen presentation: B2M–CD1A/B, GRN–TNFR); Factor 3 is fibroblast/EC-sender to cytotoxic T (LCK–CD8, GZMA–F2R); Factor 5 is fibroblast/monocyte-sender to macrophages (FN1, HGF, MMP1 → CD44). ⚠️ **No factor separates tumour from adjacent-normal samples** (Mann–Whitney on sample loadings, 58 tumour vs 24 adjacent: all p ≥ 0.31). The factors describe communication programmes that vary between samples, not tumour-specific ones. Most likely they track donor and study, since LuCA studies differ in immune enrichment. Reported as such; a study-adjusted test of the loadings is a v2.1 item.
+
+### 3.10 🚧 Post-run review — open issues (2026-11-11)
+
+The pipeline ran end to end, but reading the outputs (not just the exit codes) showed the issues below. They are listed by how much they change conclusions. None of them is a crash, so all of them would have shipped silently without this review.
+
+| # | Issue | Evidence | Effect | Proposed fix | Status |
+|---|---|---|---|---|---|
+| 1 | **Milo tested the wrong contrast** | `milo.da_nhoods(design="~condition")` with no `model_contrasts`. pertpy then tests the *last* level alphabetically, `tumour_region_unknown` (2 HLCA donors), against the reference `adjacent_normal` | the 0 significant neighbourhoods are meaningless, not a null result | `model_contrasts="conditiontumour - conditionadjacent_normal"` on tumour + adjacent samples, with donor in the design (paired, like DE). Rerun Milo only (minutes; scCODA unaffected) | open |
+| 2 | **`Unknown` holds ~25k un-called malignant cells** | 57,335 `Unknown` cells; 29,172 have the LuCA author label `malignant cell`, and only 3,903 of those pass the CNV threshold | `Unknown` is mostly tumour cells mixed with unmapped HLCA cells. It contaminates scCODA (chosen as the reference type), DE (7,947 genes) and CCC (top-20 rows). | split it: label CNV-low author-malignant cells as a separate group (e.g. `Tumour epithelial (CNV-low)`), keep `Unknown` for truly unmapped cells, and fix the scCODA reference to a stable type (e.g. Fibroblast or EC capillary). Reruns cnv → downstream | open — needs decision |
+| 3 | **Rare epithelial absorbs tumour signal in cell2location** | 66-cell reference (ionocyte/PNEC/brush) → 66 % of the tumour niche | spatial cell-type abundances are wrong for epithelium | drop or merge reference labels below a minimum size (e.g. < 200 cells) before building signatures. Fixing #2 also gives the reference a proper tumour-epithelium signature. Reruns deconvolve (~10 h CPU) → spatial → ccc spatial part | open — needs decision |
+| 4 | Tensor factors do not separate conditions | see §3.9 | interpretation only | report as sample-level programmes; v2.1 study-adjusted test | documented |
+| 5 | SOLO vs Scrublet disagreement | 41,531 vs 2,082 flagged; consensus 672 | doublet removal is effectively Scrublet-only; SOLO's rate looks miscalibrated on atlas data that the original authors already QC'd | check SOLO's score distribution per study. Consensus is the conservative choice, so no rerun for v2.0 | documented |
+| 6 | Atlas mixing below random for every cell type | e.g. Fibroblast 0.125 vs 0.493 expected | partly expected (HLCA ≈ healthy, LuCA ≈ tumour, so the same label differs in state), but it limits cross-atlas claims | add a condition-matched mixing metric (adjacent-normal LuCA vs healthy HLCA within type) | documented |
+| 7 | `report` provenance row is one run stale | the report reads `provenance/report.json` before writing its own | cosmetic | write own provenance first, or exclude self | documented |
+
+---
+
+## 4. Looking ahead: v3 — AI-native
+
+⏳ To be scoped after v2.0.0 ships. Direction: each pipeline step is already a pure function with declared inputs/outputs (`lusc_atlas.steps`) — exactly the shape an agent tool or **Claude Skill** needs. v3 candidates: a `lusc-atlas` Skill that runs/inspects steps and explains results; an MCP server over the processed AnnData/SpatialData objects; agent-assisted annotation review (cf. CellAgent, scAgent, Biomni — all early, human review required).
+
+---
+
+## 5. Project claims → evidence → v2 upgrade
+
+The project's public summary (CV / portfolio) makes specific claims. This section keeps every claim
+**traceable to code and output**, records where v1's evidence was weaker than the wording, and shows how
+v2 turns each one into something that survives expert questioning. Checked against tag `v1.0.0` on 2026-11-09.
+
+| Claim (v1 wording) | v1 evidence | Verdict | v2 upgrade (where) |
+|---|---|---|---|
+| Integrated squamous lung cancer profiles with **HLCA** reference data | LUSC cells *came from* HLCA (3 donors, 1 study); no reference mapping | ⚠️ thin | Two-atlas integration **HLCA + LuCA** (45 + 3 LUSC donors), deduplicated, label crosswalk, benchmarked (§3.2–3.3; `select.py`, `integrate.py`) |
+| **Scanpy/AnnData** | all notebooks | ✅ | packaged pipeline on scanpy 1.12 / anndata 0.13 |
+| **scVI** | scVI used only as SOLO backbone | ✅ (narrow) | scVI **and** scANVI **and** sysVI as integration candidates, chosen by scib-metrics + over-correction guard (`integrate.py`) |
+| **Seurat** | only `flavor='seurat_v3'` HVG selection inside Scanpy; no Seurat (R) code | ⚠️ overstated | not added (Python-only stack). Accurate phrasing: "Seurat-v3 HVG selection" — or drop |
+| QC + **VAE/SOLO doublet removal** | SOLO on tumour cells only (126 doublets / 20,631); output file never read downstream (R1) | ⚠️ bug | per-sample MAD QC + **Scrublet ∧ scVI-SOLO on every sample of both atlases** (`qc.py`) |
+| Cluster and annotate **18,381** single-cell profiles | `03_analysis` 18,381 cells after QC | ✅ number verified | annotation = harmonised HLCA/LuCA labels via Cell Ontology crosswalk + scANVI; cell count regenerated by the pipeline |
+| Integrated with **3,858 Visium spots** using **Scanorama** | v1 matrix 3,858 × 18,085 (an earlier 10x release); Scanorama + cosine label transfer | ✅ number / ⚠️ method | official 10x 2.0.1 release (6,195 spots); **cell2location** deconvolution (`deconvolve.py`) — Scanorama retired: a 55 µm spot holds several cells |
+| **FDR-adjusted DGE** | `pvals_adj` from cell-level Wilcoxon/t-test | ⚠️ pseudoreplication | **pseudobulk PyDESeq2**, paired tumour vs adjacent-normal within donor (`de.py`) |
+| **GSEA** | gseapy phenotype permutation with cells as samples | ⚠️ pseudoreplication | decoupler 2 **Hallmark GSEA + PROGENy + CollecTRI** on DESeq2 statistics (`de.py`) |
+| **PAGA trajectory** | PAGA graphs; `04_trajectory` never ran | ⚠️ partial | **Palantir pseudotime + CellRank 2** (CytoTRACE + pseudotime kernels), rooted in healthy basal cells (`trajectory.py`) |
+| **LIANA** ligand–receptor | rank_aggregate on pooled tumour cells | ✅ (narrow) | **LIANA+ per sample, all conditions**, differential CCC, Tensor-cell2cell, spatial bivariate LR (`ccc.py`) |
+| Disease-associated **immune, epithelial, stromal** states | compartment-level UMAPs/markers | ✅ | + CNV-defined **malignant** state, scCODA/Milo abundance shifts, CellCharter spatial **niches** |
+| **Mapped 36 cell types into tissue space** | per-spot cosine scores for 27 type columns (`05_integration`) | ⚠️ count/method | per-spot **cell-type abundances** for 27 harmonised types incl. Malignant (`results/tables/c2l_abundance.csv`); ⚠️ epithelial abundances pending §3.10 #3 |
+| Led a **five-member team** | 5 authors, git history (2 committers) | ✅ | unchanged; authors in `CITATION.cff` |
+
+**Suggested v2 wording.** Numbers are copied from `results/reports/summary.md` / `results/tables/`
+(run of 2026-11-10), not typed from memory:
+
+> *Spatial transcriptomics of squamous lung cancer (v2, reproducible pipeline).* Led a five-member team;
+> rebuilt the analysis as a tested, Snakemake/pixi-pinned Python package. Merged two curated atlases (HLCA +
+> LuCA; **231,504** cells after QC, **160** donors, **20** studies) with explicit deduplication, gene-space and
+> Cell-Ontology label harmonisation; benchmarked seven embeddings (incl. scVI/scANVI/sysVI/Harmony, scArches and
+> a Geneformer foundation-model baseline) with scib-metrics and an over-correction guard (scANVI selected).
+> Called **3,942** malignant cells by inferred CNV (chr3q-gain validated), ran donor-paired pseudobulk DESeq2
+> with PROGENy/CollecTRI/Hallmark activity, compositional (scCODA) abundance, Palantir/CellRank 2 trajectories,
+> and LIANA+ differential, tensor (Tensor-cell2cell) and spatial cell–cell communication; deconvolved **6,191**
+> Visium spots with cell2location into **27** cell types and **3** CellCharter niches.
+
+Held back until §3.10 is resolved: **Milo** (#1, wrong contrast) is left out of the wording on purpose. The
+cell2location and malignant-cell numbers are accurate as counts, but the per-type spatial findings (#3) and
+the scCODA directions (#2) should not be quoted yet.
+
+---
+
+## Timeline
+
+| Date | Change |
+|---|---|
+| 2026-11-09 | v1 audit; tag `v1.0.0`; branch `v2-dev`; tmux session `lusc-v2`; legacy move; this log created |
+| 2026-11-09 | Literature review of 2024–26 methods (stage-by-stage recommendations → §3) |
+| 2026-11-09 | Root disk filled by conda build → all tooling moved to `/storage`; pixi envs `default`/`c2l`/`workflow` built and import-verified |
+| 2026-11-09 | Visium switched to official 10x 2.0.1 release (v1 file differs) |
+| 2026-11-09 | HLCA found to hold only 3 LUSC donors → decision: HLCA + LuCA; cross-atlas merge design (§3.3) |
+| 2026-11-09 | Project claims audited against v1 outputs; claim → evidence → v2 traceability (§5) |
+| 2026-11-09 | `select` run: 249,402 cells × 17,457 genes; 20 studies kept, 0 cross-atlas duplicates after `is_primary_data`; 15/40 LUSC donors paired; Smart-seq2 excluded (non-UMI); exclusions in `merge_exclusions.csv` |
+| 2026-11-09 | Added integration candidates: **scArches transfer learning** onto the published HLCA scANVI model and **zero-shot Geneformer-V2-104M_CLcancer** (benchmark subsample, 20k cells). External pickles loaded only via `safe_load.py` (sha256-pinned, whitelisted types after static `pickletools` scan) — user-approved |
+| 2026-11-09 | Smoke test (`scripts/smoke_test.py`, 16k real cells, tiny epochs) found and fixed 5 bugs before the full run: scrublet `layer` kwarg; per-sample seurat_v3 LOESS singular on small samples → HVGs batch-aware per **study**; categorical `fillna`; CytoTRACE needs an imputed layer (kNN smoothing); smoke sampler realism. Passed end-to-end in 323 s |
+| 2026-11-09 | Observation: adjacent-normal tissue has only 1,290 epithelial cells (several LuCA studies are immune-enriched) → paired tumour-vs-adjacent DE is well powered for immune/stromal types, thin for epithelium; malignant-vs-healthy-basal contrast covers the epithelial question |
+| 2026-11-09 | Full run launched unattended in tmux `lusc-v2:pipeline` (`run_all.py --keep-going`); v2.1 roadmap started (`docs/ROADMAP_v2.1.md`) |
+| 2026-11-10 | First full run: ✓ qc 2.5 h · fm_embed 2.0 h · integrate 2.0 h · cnv 10 min · de 4 min · trajectory 4 min · **deconvolve 10.6 h** · spatial 2.4 min; ✗ abundance (scCODA needs `pertpy[jax]`, §2.3). Stopped during ccc to fix the env |
+| 2026-11-10 | Resume hardening (§2.6): atomic writes + completion stamps + `--adopt`; 12 completed steps adopted; resumed run covers abundance → ccc → report |
+| 2026-11-10 | Resumed run: ✓ abundance 2.3 h (scCODA + Milo); ✗ ccc (LIANA 1.x API on 2.1.1) · ✗ report (`tabulate`). Ported `ccc.py` to LIANA 2.x, added `tabulate` (§2.3); subsample-tested; reran → ✓ ccc 24 min · ✓ report 1 min (**ALL DONE**) |
+| 2026-11-10 | Output review found a degenerate tensor (1 LR pair) and silent failure / contrast-mixing risks in `ccc` → fixes in §3.9; tensor rescoped to tumour + adjacent samples (82 × 868 × 10 × 10); `ccc` + `report` rerun |
+| 2026-11-10 | Rescoped tensor's rank search (`upper_rank=12`) projected > 15 h (rank 1 11.5 min, rank 2 ~30 min) → stopped; ceiling made configurable and set to 8 (§3.9); `ccc` + `report` relaunched 15:52 |
+| 2026-11-10 | ✓ ccc 5.3 h (elbow rank 5, below the ceiling of 8) · ✓ report 65 s → **full pipeline complete** (21:13 PST); all 15 steps stamped |
+| 2026-11-11 | Post-run output review → results written into §3.4–3.9; 7 open issues in §3.10 (Milo contrast bug; `Unknown` holds ~25k un-called malignant cells; Rare-epithelial cell2location artefact; tensor factors not condition-specific; SOLO/Scrublet disagreement; atlas mixing; stale report provenance); §5 wording filled; README results section |

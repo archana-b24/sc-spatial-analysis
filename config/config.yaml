@@ -1,0 +1,231 @@
+# =============================================================================
+# lusc-atlas v2 — single source of truth for paths, data versions and parameters
+# Every value that changes a result lives here; code holds no magic numbers.
+# Rationale for each choice: DEVELOPMENT_LOG.md §3.
+# =============================================================================
+
+project:
+  name: lusc-atlas
+  seed: 0                      # global RNG seed (numpy, torch, scvi, leiden)
+  n_jobs: 16
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  tables: results/tables
+  figures: results/figures
+  reports: results/reports
+
+# -----------------------------------------------------------------------------
+# 1. Data — pinned versions + checksums (DEVELOPMENT_LOG §2.2)
+# -----------------------------------------------------------------------------
+data:
+  census:
+    version: "2025-11-08"            # pinned stable/LTS Census release — never "latest"
+
+  # Two atlases (DEVELOPMENT_LOG §3.2–3.3). Column names are atlas-specific; everything downstream uses
+  # the harmonised names (atlas, study, sample, donor_id, condition, harmonised_label, compartment).
+  atlases:
+    HLCA:
+      dataset_id: "9f222629-9e39-47d0-b83f-e08d610c7479"   # HLCA core+extended (Sikkema 2023)
+      file: data/raw/hlca/hlca_full_census-2025-11-08.h5ad
+      study_col: study
+      sample_col: sample
+      origin_col: null               # HLCA has no tumour/adjacent annotation → imported by sample ID if possible
+      fine_label_col: ann_finest_level
+    LuCA:
+      dataset_id: "1e6a6ef9-7ec9-4c90-bbfb-2ad3c3165fd1"   # LuCA extended (Salcher 2022)
+      file: data/raw/luca/luca_extended_census-2025-11-08.h5ad
+      study_col: study
+      sample_col: sample
+      origin_col: origin
+      fine_label_col: ann_fine
+
+  cohort:
+    tumour_disease_ontology: "MONDO:0005097"   # squamous cell lung carcinoma
+    normal_disease: "normal"
+    tissues: ["lung", "lung parenchyma"]       # primary lung only (no lymph node / effusion / nose)
+    origin_map:                                 # sample origin → condition
+      tumour: [tumor_primary, tumor_edge, tumor_middle, tumor_core]
+      adjacent_normal: [normal_adjacent]
+      exclude: [tumor_metastasis, effusion, lymph_node, nan]
+    exclude_assays: [Smart-seq2]                # non-UMI read counts: not comparable with UMI counts in NB models
+    healthy_min_age: 45                         # age-match healthy donors to LUSC patients
+    healthy_max_cells_per_donor: 1000           # healthy reference is large (≈1 M cells) → light cap
+    disease_max_cells_per_donor: 8000           # keep nearly all LUSC-patient cells
+    prefer_atlas_on_overlap: LuCA               # if a study survives dedup in both atlases, keep LuCA's copy
+
+  gene_positions:                                          # for inferCNV (chromosome ordering)
+    url: https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_44/gencode.v44.basic.annotation.gtf.gz
+
+  visium:
+    sample_id: CytAssist_11mm_FFPE_Human_Lung_Cancer
+    base_url: https://cf.10xgenomics.com/samples/spatial-exp/2.0.1/CytAssist_11mm_FFPE_Human_Lung_Cancer/CytAssist_11mm_FFPE_Human_Lung_Cancer
+    files:
+      filtered_feature_bc_matrix.h5:
+        url_suffix: _filtered_feature_bc_matrix.h5
+        sha256: d81e1238f632581990a644bccd0672d1b62208a32a7956ae1357731a1951cc02
+      spatial.tar.gz:
+        url_suffix: _spatial.tar.gz
+        sha256: 1125e5cb0372c9e14d0d3023d50518df87201f3a2a32d987f4c8a157534f3421
+        extract: true
+
+# -----------------------------------------------------------------------------
+# 2. QC & doublets (Heumos 2023 sc-best-practices) — computed PER SAMPLE
+# -----------------------------------------------------------------------------
+qc:
+  min_genes: 200
+  min_cells_per_gene: 10
+  mad_log_counts: 5
+  mad_log_genes: 5
+  mad_pct_top20: 5
+  mad_pct_mt: 3
+  max_pct_mt: 20                     # hard ceiling on top of MAD (FFPE/nuclei data differ; MAD alone can be lax)
+  min_cells_per_sample: 200          # samples smaller than this cannot support per-sample QC/doublets
+  doublets:
+    scrublet: true
+    solo: true                       # scvi SOLO per sample; cell removed only if BOTH methods call doublet
+    solo_max_epochs: 200
+
+# -----------------------------------------------------------------------------
+# 3. Integration (scVI; Lopez 2018, Gayoso 2022)
+# -----------------------------------------------------------------------------
+integration:
+  n_hvg: 3000
+  hvg_flavor: seurat_v3              # on raw counts
+  hvg_batch_key: study               # HVGs batch-aware per study (per-sample LOESS is singular for small samples)
+  batch_key: sample                  # finest technical unit (§3.3 F) — NOT atlas
+  categorical_covariates: [study, assay]
+  n_latent: 30
+  n_layers: 2
+  max_epochs: null                   # null → scvi-tools heuristic (scales epochs with dataset size)
+  early_stopping: true
+  scanvi_max_epochs: 20
+  scanvi_samples_per_label: 100
+  run_sysvi: true
+  sysvi_system_key: atlas            # sysVI "system" = the substantial batch effect (HLCA vs LuCA)
+  sysvi_cycle_weight: 2
+  benchmark_batch_key: study
+  benchmark_n_cells: 20000         # shared subsample for ALL candidates (Geneformer CPU ≈ 0.5 s/cell → ~3 h)
+  purity_tolerance: 0.05             # over-correction guard: kNN label purity may drop ≤ 0.05 vs PCA
+  leiden_resolution: 1.0
+  # --- transfer learning candidate: scArches surgery onto the published HLCA scANVI model (§3.3 G)
+  transfer:
+    enabled: true
+    reference_dir: data/raw/hlca_model/HLCA_reference_model          # Zenodo 7599104 (HLCA_reference_model.zip)
+    reference_zip_url: https://zenodo.org/api/records/7599104/files/HLCA_reference_model.zip/content
+    reference_zip_sha256: a7cd60f4342292b3cba54545bcd8a34decdc8e6b82163f009273d543e7e3910e
+    converted_dir: data/interim/hlca_reference_scvi1x
+    surgery_epochs: 50               # HLCA paper used 500 on GPU; frozen weights converge much earlier
+    sha256:                          # loaded only through lusc_atlas.safe_load (restricted unpickler)
+      attr.pkl: 2954c8ce7508d98fff37d70fc72709b41f0b55a18b81464bac3354ccab5b5284
+      model_params.pt: e19438f02b67feff36fdbf118d364ac06717f9090c2dcead747d1e63b72f97c9
+      var_names.csv: 91a100529b5ce6abd5d813f26cdc826fb751d91c50d25e091e38b132dd9de666
+  # --- foundation-model candidate: zero-shot Geneformer (benchmark subsample only) (§3.3 G)
+  foundation_model:
+    enabled: true
+    repo_id: ctheodoris/Geneformer
+    revision: 1f7fbae4e469a5f4f1af8c111a529cfe1b3829f5   # pinned commit
+    model: Geneformer-V2-104M_CLcancer                     # cancer continual-pretrained V2
+    local_dir: data/raw/geneformer
+    input_size: 4096
+    batch_size: 8
+    token_dict: geneformer/token_dictionary_gc104M.pkl
+    median_dict: geneformer/gene_median_dictionary_gc104M.pkl
+    files:
+      Geneformer-V2-104M_CLcancer/config.json: b3e1f3e71b1df7238f0f1d6dda258d560ea84e5e9698351a1588cfad06321e18
+      Geneformer-V2-104M_CLcancer/model.safetensors: 827738139bfed4bafa9d1f3df7c6146da2e3b85f7225076adc32c6eda0ba4357
+      geneformer/token_dictionary_gc104M.pkl: 67c445f4385127adfc48dcc072320cd65d6822829bf27dd38070e6e787bc597f
+      geneformer/gene_median_dictionary_gc104M.pkl: a51c53f6a771d64508dfaf61529df70e394c53bd20856926117ae5d641a24bf5
+  harmonised_label_key: harmonised_label   # from config/label_crosswalk.csv
+  label_key: harmonised_label
+  coarse_label_key: harmonised_label
+
+# -----------------------------------------------------------------------------
+# 4. Malignant-cell calling (infercnvpy; Tirosh 2016)
+# -----------------------------------------------------------------------------
+cnv:
+  compartment_key: compartment       # from the label crosswalk
+  epithelial_compartment: Epithelial
+  reference_compartments: [Immune, Endothelial, Stroma]   # diploid reference
+  max_ref_cells_per_compartment: 5000
+  window_size: 250
+  step: 10
+  leiden_resolution: 1.0
+  score_quantile_normal: 0.95        # null = CNV score of epithelium from HEALTHY donors
+  tumour_conditions: [tumour, tumour_region_unknown]      # malignant calls only allowed here
+  check_arms: ["chr3q"]              # LUSC hallmark gain (SOX2/TP63) — positive control
+  author_label_check: "malignant cell"   # LuCA author label → concordance with our CNV calls
+
+# -----------------------------------------------------------------------------
+# 5. Differential expression, pathways, abundance (Squair 2021; Muzellec 2023)
+# -----------------------------------------------------------------------------
+de:
+  pseudobulk_sample_key: sample
+  group_key: de_group                # harmonised labels + "Malignant" (set by the CNV step)
+  condition_key: condition
+  min_cells_per_pseudobulk: 10
+  min_samples_per_condition: 3
+  contrasts:
+    # PRIMARY: paired within donor → donor & study effects cancel by design (§3.3 H)
+    paired_tumour_vs_adjacent: {case: tumour, control: adjacent_normal, paired: true}
+    # SECONDARY (sensitivity): unpaired, study/assay as covariates where not collinear
+    tumour_vs_healthy: {case: tumour, control: healthy, paired: false}
+  alpha: 0.05
+  pathways:
+    progeny_top: 500
+    collectri: true
+    hallmark: true
+abundance:
+  sccoda_reference: automatic
+  milo_k: 30
+  milo_prop: 0.1
+
+# -----------------------------------------------------------------------------
+# 6. Trajectory (CellRank 2 + Palantir; Weiler 2024, Setty 2019)
+# -----------------------------------------------------------------------------
+trajectory:
+  label_key: harmonised_label
+  root_label: Basal                  # healthy-donor basal cells
+  include_labels: [Basal, Malignant]
+  n_components: 10
+  num_waypoints: 1200
+  n_macrostates: 3
+
+# -----------------------------------------------------------------------------
+# 7. Spatial (SpatialData, cell2location, squidpy, CellCharter)
+# -----------------------------------------------------------------------------
+spatial:
+  min_counts: 500
+  min_genes: 250
+  max_pct_mt: 25
+  min_cells_per_gene: 10
+  c2l:
+    reference_label: de_group        # labels used to build the reference signatures
+    ref_max_epochs: 250
+    max_epochs: 30000
+    n_cells_per_location: 10         # FFPE lung tumour, 55 µm spots (cell2location tutorial guidance)
+    detection_alpha: 20
+    max_ref_cells_per_label: 3000
+  svg_top: 100
+  nhood_n_rings: 1
+  cellcharter:
+    n_layers: 3
+    cluster_range: [3, 12]
+
+# -----------------------------------------------------------------------------
+# 8. Cell–cell communication (LIANA+; Dimitrov 2024)
+# -----------------------------------------------------------------------------
+ccc:
+  groupby: de_group
+  de_contrast: paired_tumour_vs_adjacent  # DE contrast feeding differential CCC (one design only)
+  expr_prop: 0.1
+  min_cells: 10
+  resource: consensus
+  tensor_rank: auto
+  tensor_upper_rank: 8  # elbow search ceiling; 12 projected >15 h on CPU (rank fit time grows with rank)
+  tensor_conditions: [tumour, tumour_region_unknown, adjacent_normal]  # healthy donors excluded
+  tensor_outer_fraction: 0.333  # keep cells / LR pairs present in ≥1/3 of tensor samples
+  tensor_exclude_labels: [Unknown]
+  spatial_bandwidth: 200

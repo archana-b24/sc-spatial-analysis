@@ -1,3 +1,27 @@
+# --- data & outputs: produced by the pipeline, never committed ---
+data/
+results/
+!results/.gitkeep
 **/*.h5ad
-CytAssist*
 **/*.h5
+**/*.zarr/
+**/*.loom
+legacy/v1/visium_spaceranger_outputs_untracked/
+
+# --- workflow / runtime ---
+.snakemake/
+logs/*.log
+# per-step logs + .done/ completion stamps: machine-local run state (DEVELOPMENT_LOG §2.6)
+logs/run_all/
+.ipynb_checkpoints/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+gseapy_out/
+figures/
+
+# --- OS / editor ---
+.DS_Store
+.vscode/
+.idea/
