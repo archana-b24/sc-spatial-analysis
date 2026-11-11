@@ -105,12 +105,22 @@ def run_contrast(pdata: ad.AnnData, dcfg: dict, name: str, spec: dict, n_jobs: i
             log.warning("[%s] %s failed: %s", name, grp, exc)
             continue
         res = st.results_df.rename_axis("gene").reset_index()
-        out.append(res.assign(contrast=name, group=grp, design=design, n_case=int(n.get(case, 0)),
-                              n_control=int(n.get(ctrl, 0)), n_donors=int(sub.obs["donor_id"].nunique())))
+        out.append(
+            res.assign(
+                contrast=name,
+                group=grp,
+                design=design,
+                n_case=int(n.get(case, 0)),
+                n_control=int(n.get(ctrl, 0)),
+                n_donors=int(sub.obs["donor_id"].nunique()),
+            )
+        )
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
-def malignant_vs_healthy_basal(pdata: ad.AnnData, dcfg: dict, basal_label: str = "Basal", n_jobs: int = 8) -> pd.DataFrame:
+def malignant_vs_healthy_basal(
+    pdata: ad.AnnData, dcfg: dict, basal_label: str = "Basal", n_jobs: int = 8
+) -> pd.DataFrame:
     """The 'progression' contrast: malignant pseudobulks vs healthy-donor basal pseudobulks.
 
     Unpaired by necessity (healthy donors have no tumour); study/assay added when not collinear.
@@ -123,7 +133,8 @@ def malignant_vs_healthy_basal(pdata: ad.AnnData, dcfg: dict, basal_label: str =
     mask = (pdata.obs[g] == "Malignant") | ((pdata.obs[g] == basal_label) & (pdata.obs[cond] == "healthy"))
     sub = pdata[mask].copy()
     sub.obs["epi_state"] = pd.Categorical(
-        np.where(sub.obs[g] == "Malignant", "malignant", "healthy_basal"), categories=["healthy_basal", "malignant"]
+        np.where(sub.obs[g] == "Malignant", "malignant", "healthy_basal"),
+        categories=["healthy_basal", "malignant"],
     )
     n = sub.obs["epi_state"].value_counts()
     if (n == 0).any() or n.min() < dcfg["min_samples_per_condition"]:
@@ -137,11 +148,21 @@ def malignant_vs_healthy_basal(pdata: ad.AnnData, dcfg: dict, basal_label: str =
     inference = DefaultInference(n_cpus=n_jobs)
     dds = DeseqDataSet(adata=sub, design=design, inference=inference, quiet=True)
     dds.deseq2()
-    st = DeseqStats(dds, contrast=["epi_state", "malignant", "healthy_basal"], inference=inference, quiet=True)
+    st = DeseqStats(
+        dds, contrast=["epi_state", "malignant", "healthy_basal"], inference=inference, quiet=True
+    )
     st.summary()
-    return st.results_df.rename_axis("gene").reset_index().assign(
-        contrast="malignant_vs_healthy_basal", group="Malignant", design=design,
-        n_case=int(n["malignant"]), n_control=int(n["healthy_basal"]))
+    return (
+        st.results_df.rename_axis("gene")
+        .reset_index()
+        .assign(
+            contrast="malignant_vs_healthy_basal",
+            group="Malignant",
+            design=design,
+            n_case=int(n["malignant"]),
+            n_control=int(n["healthy_basal"]),
+        )
+    )
 
 
 def pathway_activities(de: pd.DataFrame, pcfg: dict) -> dict[str, pd.DataFrame]:

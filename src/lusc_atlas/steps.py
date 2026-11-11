@@ -170,8 +170,14 @@ def fetch_atlases(cfg: dict) -> None:
         uri = cc.get_source_h5ad_uri(acfg["dataset_id"], census_version=version)["uri"]
         if not dest.exists():
             cc.download_source_h5ad(acfg["dataset_id"], to_path=str(dest), census_version=version)
-        records[name] = {"dataset_id": acfg["dataset_id"], "census_version": version, "source_uri": uri,
-                         "bytes": dest.stat().st_size, "sha256": sha256(dest), "path": acfg["file"]}
+        records[name] = {
+            "dataset_id": acfg["dataset_id"],
+            "census_version": version,
+            "source_uri": uri,
+            "bytes": dest.stat().st_size,
+            "sha256": sha256(dest),
+            "path": acfg["file"],
+        }
     out = _p(cfg, OUTPUTS["fetch_atlases"][0])
     out.write_text(json.dumps(records, indent=2))
 
@@ -210,7 +216,9 @@ def fm_embed(cfg: dict) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     icfg = cfg["integration"]
     if not icfg["foundation_model"]["enabled"]:
-        np.savez(out, obs_names=np.array([], dtype=str), emb=np.zeros((0, 0)), info=json.dumps({"enabled": False}))
+        np.savez(
+            out, obs_names=np.array([], dtype=str), emb=np.zeros((0, 0)), info=json.dumps({"enabled": False})
+        )
         return
     a = ad.read_h5ad(_p(cfg, INPUTS["fm_embed"][0]), backed="r")
     idx = benchmark_cells(a.obs_names, icfg["benchmark_n_cells"], cfg["project"]["seed"])
@@ -232,20 +240,32 @@ def integrate(cfg: dict) -> None:
     fm = np.load(_p(cfg, INPUTS["integrate"][1]), allow_pickle=False)
     fm_embedding = (fm["obs_names"], fm["emb"]) if fm["emb"].size else None
     scores, chosen, scanvi_model, extra = run_integration(
-        adata, cfg["integration"], cfg["project"]["seed"], cfg["project"]["n_jobs"],
-        repo=Path(cfg["_repo_root"]), fm_embedding=fm_embedding)
+        adata,
+        cfg["integration"],
+        cfg["project"]["seed"],
+        cfg["project"]["n_jobs"],
+        repo=Path(cfg["_repo_root"]),
+        fm_embedding=fm_embedding,
+    )
     scanvi_model.save(str(_p(cfg, "data/interim/scanvi_model")), overwrite=True)
     _write_table(scores, resolve(cfg, "tables", "integration_benchmark.csv"))
     resolve(cfg, "reports", "integration_info.json").write_text(json.dumps(extra, indent=2, default=str))
-    _write_table(atlas_mixing_per_label(adata, cfg["integration"]["harmonised_label_key"]),
-                 resolve(cfg, "tables", "atlas_mixing_per_label.csv"))
+    _write_table(
+        atlas_mixing_per_label(adata, cfg["integration"]["harmonised_label_key"]),
+        resolve(cfg, "tables", "atlas_mixing_per_label.csv"),
+    )
     lab = cfg["integration"]["harmonised_label_key"]
     conf = pd.crosstab(adata.obs[lab].astype(str), adata.obs["scanvi_prediction"].astype(str))
-    _write_table(conf.rename_axis("harmonised_label").reset_index(), resolve(cfg, "tables", "scanvi_label_confusion.csv"))
+    _write_table(
+        conf.rename_axis("harmonised_label").reset_index(),
+        resolve(cfg, "tables", "scanvi_label_confusion.csv"),
+    )
     if "hlca_ref_prediction" in adata.obs:
         conf2 = pd.crosstab(adata.obs[lab].astype(str), adata.obs["hlca_ref_prediction"].astype(str))
-        _write_table(conf2.rename_axis("harmonised_label").reset_index(),
-                     resolve(cfg, "tables", "scarches_hlca_label_confusion.csv"))
+        _write_table(
+            conf2.rename_axis("harmonised_label").reset_index(),
+            resolve(cfg, "tables", "scarches_hlca_label_confusion.csv"),
+        )
     _write_h5ad(adata, _p(cfg, OUTPUTS["integrate"][0]))
 
 
@@ -256,15 +276,20 @@ def cnv(cfg: dict) -> None:
     from .de import make_de_groups
 
     adata = ad.read_h5ad(_p(cfg, INPUTS["cnv"][0]))
-    pos = gene_positions_from_gtf(cfg["data"]["gene_positions"]["url"],
-                                  _p(cfg, "data/raw/gencode.v44.basic.annotation.gtf.gz"))
+    pos = gene_positions_from_gtf(
+        cfg["data"]["gene_positions"]["url"], _p(cfg, "data/raw/gencode.v44.basic.annotation.gtf.gz")
+    )
     annotate_positions(adata, pos)
     summary = run_infercnv(adata, cfg["cnv"], n_jobs=cfg["project"]["n_jobs"], seed=cfg["project"]["seed"])
     make_de_groups(adata, cfg["integration"]["harmonised_label_key"])
     _write_table(summary, _p(cfg, OUTPUTS["cnv"][1]))
-    _write_table(author_label_concordance(adata, cfg["cnv"]["author_label_check"]),
-                 resolve(cfg, "tables", "cnv_vs_author_malignant.csv"))
-    per_donor = adata.obs.groupby(["atlas", "donor_id", "condition"], observed=True)["malignant"].agg(["sum", "size"])
+    _write_table(
+        author_label_concordance(adata, cfg["cnv"]["author_label_check"]),
+        resolve(cfg, "tables", "cnv_vs_author_malignant.csv"),
+    )
+    per_donor = adata.obs.groupby(["atlas", "donor_id", "condition"], observed=True)["malignant"].agg(
+        ["sum", "size"]
+    )
     _write_table(per_donor.reset_index(), resolve(cfg, "tables", "cnv_malignant_per_donor.csv"))
     _write_h5ad(adata, _p(cfg, OUTPUTS["cnv"][0]))
 
@@ -277,7 +302,9 @@ def de(cfg: dict) -> None:
     adata = ad.read_h5ad(_p(cfg, INPUTS["de"][0]))
     pdata = pseudobulk(adata, cfg["de"])
     nj = min(8, cfg["project"]["n_jobs"])
-    res = [run_contrast(pdata, cfg["de"], name, spec, n_jobs=nj) for name, spec in cfg["de"]["contrasts"].items()]
+    res = [
+        run_contrast(pdata, cfg["de"], name, spec, n_jobs=nj) for name, spec in cfg["de"]["contrasts"].items()
+    ]
     res.append(malignant_vs_healthy_basal(pdata, cfg["de"], cfg["trajectory"]["root_label"], n_jobs=nj))
     allres = pd.concat([r for r in res if not r.empty], ignore_index=True)
     _write_table(allres, _p(cfg, OUTPUTS["de"][0]))

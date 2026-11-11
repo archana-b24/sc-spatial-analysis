@@ -72,14 +72,27 @@ def run_infercnv(adata: ad.AnnData, ccfg: dict, n_jobs: int = 16, seed: int = 0)
     ref_idx = []
     for c in ccfg["reference_compartments"]:
         idx = np.where(comp == c)[0]
-        ref_idx.append(idx if len(idx) <= ccfg["max_ref_cells_per_compartment"]
-                       else rng.choice(idx, ccfg["max_ref_cells_per_compartment"], replace=False))
+        ref_idx.append(
+            idx
+            if len(idx) <= ccfg["max_ref_cells_per_compartment"]
+            else rng.choice(idx, ccfg["max_ref_cells_per_compartment"], replace=False)
+        )
     run_idx = np.sort(np.concatenate([np.where(epi)[0], *ref_idx]))
     sub = adata[run_idx].copy()
-    sub.obs["cnv_reference"] = np.where(sub.obs[ccfg["compartment_key"]].astype(str).isin(ccfg["reference_compartments"]),
-                                        "reference", "query")
-    cnv.tl.infercnv(sub, reference_key="cnv_reference", reference_cat="reference",
-                    window_size=ccfg["window_size"], step=ccfg["step"], n_jobs=n_jobs, layer="lognorm")
+    sub.obs["cnv_reference"] = np.where(
+        sub.obs[ccfg["compartment_key"]].astype(str).isin(ccfg["reference_compartments"]),
+        "reference",
+        "query",
+    )
+    cnv.tl.infercnv(
+        sub,
+        reference_key="cnv_reference",
+        reference_cat="reference",
+        window_size=ccfg["window_size"],
+        step=ccfg["step"],
+        n_jobs=n_jobs,
+        layer="lognorm",
+    )
     cnv.tl.pca(sub)
     cnv.pp.neighbors(sub)
     cnv.tl.leiden(sub, resolution=ccfg["leiden_resolution"])
@@ -89,12 +102,19 @@ def run_infercnv(adata: ad.AnnData, ccfg: dict, n_jobs: int = 16, seed: int = 0)
     sub_epi = sub.obs[ccfg["compartment_key"]].astype(str) == ccfg["epithelial_compartment"]
     null = sub.obs.loc[sub_epi & (sub.obs["condition"] == "healthy"), "cnv_score"]
     if len(null) < 100:
-        raise ValueError(f"only {len(null)} healthy epithelial cells for the CNV null — cannot set a threshold")
+        raise ValueError(
+            f"only {len(null)} healthy epithelial cells for the CNV null — cannot set a threshold"
+        )
     thr = float(np.quantile(null, ccfg["score_quantile_normal"]))
     in_tumour = sub.obs["condition"].isin(ccfg["tumour_conditions"])
     sub.obs["malignant"] = (sub_epi & in_tumour & (sub.obs["cnv_score"] > thr)).values
-    log.info("CNV threshold %.4f (q%.2f of %d healthy epithelial cells) → %d malignant cells",
-             thr, ccfg["score_quantile_normal"], len(null), int(sub.obs["malignant"].sum()))
+    log.info(
+        "CNV threshold %.4f (q%.2f of %d healthy epithelial cells) → %d malignant cells",
+        thr,
+        ccfg["score_quantile_normal"],
+        len(null),
+        int(sub.obs["malignant"].sum()),
+    )
 
     for col in ["cnv_score", "cnv_chr3q"]:
         adata.obs[col] = np.nan
@@ -108,14 +128,30 @@ def run_infercnv(adata: ad.AnnData, ccfg: dict, n_jobs: int = 16, seed: int = 0)
     adata.obsm["X_cnv"] = _scatter_rows(sub.obsm["X_cnv"], run_idx, adata.n_obs)
 
     grp = np.select(
-        [sub.obs["malignant"], sub_epi & (sub.obs["condition"] == "healthy"),
-         sub_epi & (sub.obs["condition"] == "adjacent_normal"), sub_epi],
-        ["malignant", "healthy epithelium", "adjacent-normal epithelium", "tumour-sample epithelium, CNV-low"],
-        default="reference (immune/endothelial/stroma)")
-    summary = (sub.obs.assign(cnv_group=grp).groupby("cnv_group")
-               .agg(n_cells=("cnv_score", "size"), mean_cnv_score=("cnv_score", "mean"),
-                    mean_chr3q=("cnv_chr3q", "mean"))
-               .reset_index())
+        [
+            sub.obs["malignant"],
+            sub_epi & (sub.obs["condition"] == "healthy"),
+            sub_epi & (sub.obs["condition"] == "adjacent_normal"),
+            sub_epi,
+        ],
+        [
+            "malignant",
+            "healthy epithelium",
+            "adjacent-normal epithelium",
+            "tumour-sample epithelium, CNV-low",
+        ],
+        default="reference (immune/endothelial/stroma)",
+    )
+    summary = (
+        sub.obs.assign(cnv_group=grp)
+        .groupby("cnv_group")
+        .agg(
+            n_cells=("cnv_score", "size"),
+            mean_cnv_score=("cnv_score", "mean"),
+            mean_chr3q=("cnv_chr3q", "mean"),
+        )
+        .reset_index()
+    )
     summary["threshold"] = thr
     return summary
 

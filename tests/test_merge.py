@@ -12,26 +12,38 @@ from lusc_atlas.select import assign_condition, is_count_matrix, keys_overlap, s
 CCFG = {
     "tumour_disease_ontology": "MONDO:0005097",
     "normal_disease": "normal",
-    "origin_map": {"tumour": ["tumor_primary"], "adjacent_normal": ["normal_adjacent"], "exclude": ["tumor_metastasis"]},
+    "origin_map": {
+        "tumour": ["tumor_primary"],
+        "adjacent_normal": ["normal_adjacent"],
+        "exclude": ["tumor_metastasis"],
+    },
 }
 
 
 def test_same_deposit_named_differently_is_detected():
     assert keys_overlap(study_key("Thienpont_2018"), study_key("Lambrechts_Thienpont_2018_6653"))
-    assert not keys_overlap(study_key("Thienpont_2018"), study_key("Thienpont_2021"))  # same author, other year
+    assert not keys_overlap(
+        study_key("Thienpont_2018"), study_key("Thienpont_2021")
+    )  # same author, other year
     assert not keys_overlap(study_key("Travaglini_2020"), study_key("Kim_Lee_2020"))
 
 
 def test_condition_uses_origin_and_imports_missing_origin_by_sample():
-    obs = pd.DataFrame({
-        "disease_ontology_term_id": ["MONDO:0005097"] * 4 + ["PATO:0000461"],
-        "disease": ["squamous cell lung carcinoma"] * 4 + ["normal"],
-        "study": ["Thienpont_2018"] * 5,
-        "sample": ["BT1001", "BT1002", "BT1003", "BT1004", "h1"],
-    })
+    obs = pd.DataFrame(
+        {
+            "disease_ontology_term_id": ["MONDO:0005097"] * 4 + ["PATO:0000461"],
+            "disease": ["squamous cell lung carcinoma"] * 4 + ["normal"],
+            "study": ["Thienpont_2018"] * 5,
+            "sample": ["BT1001", "BT1002", "BT1003", "BT1004", "h1"],
+        }
+    )
     k = study_key("Lambrechts_Thienpont_2018_6653")  # same deposit, other atlas' naming
-    lookup = {(k, "1001"): "tumor_primary", (k, "1002"): "normal_adjacent", (k, "1003"): "tumor_metastasis",
-              (study_key("Other_2018"), "1004"): "tumor_primary"}  # same id, different study → must NOT match
+    lookup = {
+        (k, "1001"): "tumor_primary",
+        (k, "1002"): "normal_adjacent",
+        (k, "1003"): "tumor_metastasis",
+        (study_key("Other_2018"), "1004"): "tumor_primary",
+    }  # same id, different study → must NOT match
     acfg = {"origin_col": None, "sample_col": "sample", "study_col": "study"}
     cond = assign_condition(obs, acfg, CCFG, lookup)
     assert cond.tolist() == ["tumour", "adjacent_normal", "excluded", "tumour_region_unknown", "healthy"]

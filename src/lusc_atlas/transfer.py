@@ -47,7 +47,9 @@ def convert_reference(tcfg: dict, repo: Path) -> Path:
     verify(src / "var_names.csv", sums["var_names.csv"])
     var_names = np.genfromtxt(src / "var_names.csv", delimiter=",", dtype=str)
     setup = attr.pop("scvi_setup_dict_")
-    attr["registry_"] = registry_from_setup_dict(SCANVI, setup, unlabeled_category=attr.get("unlabeled_category_"))
+    attr["registry_"] = registry_from_setup_dict(
+        SCANVI, setup, unlabeled_category=attr.get("unlabeled_category_")
+    )
     out.mkdir(parents=True, exist_ok=True)
     torch.save({"model_state_dict": state_dict, "var_names": var_names, "attr_dict": attr}, out / "model.pt")
     log.info("converted HLCA reference → %s (%d genes)", out, len(var_names))
@@ -63,8 +65,10 @@ def map_to_reference(adata: ad.AnnData, tcfg: dict, repo: Path, seed: int = 0) -
     ref_dir = convert_reference(tcfg, repo)
     q = ad.AnnData(
         X=adata.layers["counts"].copy(),
-        obs=pd.DataFrame({"dataset": adata.obs["sample"].astype(str).values,
-                          "scanvi_label": "unlabeled"}, index=adata.obs_names),
+        obs=pd.DataFrame(
+            {"dataset": adata.obs["sample"].astype(str).values, "scanvi_label": "unlabeled"},
+            index=adata.obs_names,
+        ),
         var=pd.DataFrame(index=adata.var["ensembl_id"].astype(str).values),
     )
     q.var_names_make_unique()
@@ -72,9 +76,17 @@ def map_to_reference(adata: ad.AnnData, tcfg: dict, repo: Path, seed: int = 0) -
     n_ref = q.n_vars
     missing = int((np.asarray(q.X.sum(axis=0)).ravel() == 0).sum())
     model = SCANVI.load_query_data(q, str(ref_dir), freeze_dropout=True)
-    model.train(max_epochs=tcfg["surgery_epochs"], plan_kwargs={"weight_decay": 0.0},
-                early_stopping=True, check_val_every_n_epoch=1)
+    model.train(
+        max_epochs=tcfg["surgery_epochs"],
+        plan_kwargs={"weight_decay": 0.0},
+        early_stopping=True,
+        check_val_every_n_epoch=1,
+    )
     adata.obsm["X_scArches"] = model.get_latent_representation()
     adata.obs["hlca_ref_prediction"] = pd.Categorical(model.predict())
-    return {"reference_genes": n_ref, "reference_genes_unobserved_in_query": missing,
-            "frac_unobserved": round(missing / n_ref, 4), "surgery_epochs": tcfg["surgery_epochs"]}
+    return {
+        "reference_genes": n_ref,
+        "reference_genes_unobserved_in_query": missing,
+        "frac_unobserved": round(missing / n_ref, 4),
+        "surgery_epochs": tcfg["surgery_epochs"],
+    }

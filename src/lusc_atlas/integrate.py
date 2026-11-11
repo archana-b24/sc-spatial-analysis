@@ -46,7 +46,9 @@ def normalise(adata: ad.AnnData) -> None:
 def select_hvgs(adata: ad.AnnData, icfg: dict) -> ad.AnnData:
     from .utils import robust_hvg
 
-    robust_hvg(adata, icfg["n_hvg"], layer="counts", batch_key=icfg["hvg_batch_key"], flavor=icfg["hvg_flavor"])
+    robust_hvg(
+        adata, icfg["n_hvg"], layer="counts", batch_key=icfg["hvg_batch_key"], flavor=icfg["hvg_flavor"]
+    )
     return adata[:, adata.var["highly_variable"]].copy()
 
 
@@ -128,15 +130,22 @@ def benchmark_cells(obs_names: pd.Index, n: int, seed: int) -> np.ndarray:
     return np.sort(rng.choice(len(obs_names), size=min(n, len(obs_names)), replace=False))
 
 
-def benchmark(adata: ad.AnnData, keys: list[str], label_key: str, batch_key: str, idx: np.ndarray,
-              n_jobs: int) -> pd.DataFrame:
+def benchmark(
+    adata: ad.AnnData, keys: list[str], label_key: str, batch_key: str, idx: np.ndarray, n_jobs: int
+) -> pd.DataFrame:
     """scib-metrics + kNN label purity on the shared subsample (cells with known harmonised label)."""
     from scib_metrics.benchmark import Benchmarker
 
     sub = adata[idx].copy()
     sub = sub[sub.obs[label_key].astype(str) != "Unknown"].copy()
-    bm = Benchmarker(sub, batch_key=batch_key, label_key=label_key, embedding_obsm_keys=keys,
-                     pre_integrated_embedding_obsm_key="X_pca", n_jobs=n_jobs)
+    bm = Benchmarker(
+        sub,
+        batch_key=batch_key,
+        label_key=label_key,
+        embedding_obsm_keys=keys,
+        pre_integrated_embedding_obsm_key="X_pca",
+        n_jobs=n_jobs,
+    )
     bm.benchmark()
     res = bm.get_results(min_max_scale=False)
     res = res.drop(index="Metric Type", errors="ignore").apply(pd.to_numeric, errors="coerce")
@@ -156,8 +165,14 @@ def choose(scores: pd.DataFrame, tolerance: float) -> str:
     return str(ok.sort_values("Total", ascending=False).embedding.iloc[0])
 
 
-def run_integration(adata: ad.AnnData, icfg: dict, seed: int = 0, n_jobs: int = 16, repo=None,
-                    fm_embedding: tuple[np.ndarray, np.ndarray] | None = None) -> tuple[pd.DataFrame, str, object, dict]:
+def run_integration(
+    adata: ad.AnnData,
+    icfg: dict,
+    seed: int = 0,
+    n_jobs: int = 16,
+    repo=None,
+    fm_embedding: tuple[np.ndarray, np.ndarray] | None = None,
+) -> tuple[pd.DataFrame, str, object, dict]:
     import scvi
     import torch
 
@@ -193,8 +208,11 @@ def run_integration(adata: ad.AnnData, icfg: dict, seed: int = 0, n_jobs: int = 
         full[idx] = emb
         adata.obsm["X_geneformer"] = full
 
-    keys = [k for k in ["X_pca", "X_harmony", "X_scVI", "X_scANVI", "X_sysVI", "X_scArches", "X_geneformer"]
-            if k in adata.obsm]
+    keys = [
+        k
+        for k in ["X_pca", "X_harmony", "X_scVI", "X_scANVI", "X_sysVI", "X_scArches", "X_geneformer"]
+        if k in adata.obsm
+    ]
     scores = benchmark(adata, keys, label, icfg["benchmark_batch_key"], idx, n_jobs)
     chosen = choose(scores, icfg["purity_tolerance"])
     scores["chosen"] = scores.embedding == chosen
@@ -206,8 +224,15 @@ def run_integration(adata: ad.AnnData, icfg: dict, seed: int = 0, n_jobs: int = 
     adata.uns["integration"] = {"chosen": chosen, "candidates": keys}
     sc.pp.neighbors(adata, use_rep="X_integrated", random_state=seed)
     sc.tl.umap(adata, random_state=seed)
-    sc.tl.leiden(adata, resolution=icfg["leiden_resolution"], random_state=seed, key_added="leiden",
-                 flavor="igraph", n_iterations=2, directed=False)
+    sc.tl.leiden(
+        adata,
+        resolution=icfg["leiden_resolution"],
+        random_state=seed,
+        key_added="leiden",
+        flavor="igraph",
+        n_iterations=2,
+        directed=False,
+    )
     return scores, chosen, lvae, extra
 
 

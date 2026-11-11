@@ -55,14 +55,17 @@ def load_geneformer(fcfg: dict, repo: Path):
     tok = load_pickle(files[fcfg["token_dict"]], fcfg["files"][fcfg["token_dict"]])
     med = load_pickle(files[fcfg["median_dict"]], fcfg["files"][fcfg["median_dict"]])
     cfg = BertConfig.from_json_file(str(files[f"{fcfg['model']}/config.json"]))
-    model = BertModel.from_pretrained(str(d / fcfg["model"]), config=cfg, use_safetensors=True,
-                                      add_pooling_layer=False)
+    model = BertModel.from_pretrained(
+        str(d / fcfg["model"]), config=cfg, use_safetensors=True, add_pooling_layer=False
+    )
     model.eval()
     torch.set_grad_enabled(False)
     return model, tok, med, cfg
 
 
-def tokenize(X: sp.csr_matrix, ensembl: np.ndarray, tok: dict, med: dict, input_size: int) -> list[np.ndarray]:
+def tokenize(
+    X: sp.csr_matrix, ensembl: np.ndarray, tok: dict, med: dict, input_size: int
+) -> list[np.ndarray]:
     """Rank-value encoding (Geneformer). X = raw counts, rows = cells."""
     keep = np.array([g in tok and g in med for g in ensembl])
     gidx = np.where(keep)[0]
@@ -89,14 +92,19 @@ def embed(adata: ad.AnnData, fcfg: dict, repo: Path, n_threads: int = 16) -> tup
     torch.set_num_threads(n_threads)
     model, tok, med, cfg = load_geneformer(fcfg, repo)
     input_size = min(fcfg["input_size"], cfg.max_position_embeddings)
-    seqs = tokenize(adata.layers["counts"], adata.var["ensembl_id"].astype(str).str.split(".").str[0].to_numpy(),
-                    tok, med, input_size)
+    seqs = tokenize(
+        adata.layers["counts"],
+        adata.var["ensembl_id"].astype(str).str.split(".").str[0].to_numpy(),
+        tok,
+        med,
+        input_size,
+    )
     pad = tok["<pad>"]
     order = np.argsort([len(s) for s in seqs])  # length-bucketed batches → minimal padding
     emb = np.zeros((len(seqs), cfg.hidden_size), dtype=np.float32)
     bs, t0 = fcfg["batch_size"], time.time()
     for b in range(0, len(order), bs):
-        idx = order[b: b + bs]
+        idx = order[b : b + bs]
         L = max(len(seqs[i]) for i in idx)
         ids = np.full((len(idx), L), pad, dtype=np.int64)
         for r, i in enumerate(idx):
@@ -113,7 +121,12 @@ def embed(adata: ad.AnnData, fcfg: dict, repo: Path, n_threads: int = 16) -> tup
         if (b // bs) % 50 == 0:
             done = b + len(idx)
             log.info("geneformer %d/%d cells (%.2f s/cell)", done, len(order), (time.time() - t0) / done)
-    info = {"model": fcfg["model"], "revision": fcfg["revision"], "input_size": input_size,
-            "n_cells": len(seqs), "median_tokens": int(np.median([len(s) for s in seqs])),
-            "seconds": round(time.time() - t0, 1)}
+    info = {
+        "model": fcfg["model"],
+        "revision": fcfg["revision"],
+        "input_size": input_size,
+        "n_cells": len(seqs),
+        "median_tokens": int(np.median([len(s) for s in seqs])),
+        "seconds": round(time.time() - t0, 1),
+    }
     return emb, info

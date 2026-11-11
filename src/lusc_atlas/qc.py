@@ -138,7 +138,11 @@ def run_qc(
     adata = adata[keep.values].copy()
     sc.pp.filter_genes(adata, min_cells=qcfg["min_cells_per_gene"])
     summary["n_kept"] = (
-        summary[sample_key].astype(str).map(adata.obs[sample_key].astype(str).value_counts()).fillna(0).astype(int)
+        summary[sample_key]
+        .astype(str)
+        .map(adata.obs[sample_key].astype(str).value_counts())
+        .fillna(0)
+        .astype(int)
     )
     log.info("QC kept %d / %d cells", adata.n_obs, int(summary["n_cells"].sum()))
     return adata, summary

@@ -46,12 +46,20 @@ def main() -> int:
     g.add_argument("--from", dest="start", choices=ORDER, help="start at this step")
     ap.add_argument("--force", action="store_true", help="re-run even if outputs exist")
     ap.add_argument("--dry-run", action="store_true", help="print the plan and exit")
-    ap.add_argument("--keep-going", action="store_true",
-                    help="on failure, continue with steps whose inputs exist (unattended runs)")
+    ap.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="on failure, continue with steps whose inputs exist (unattended runs)",
+    )
     ap.add_argument("--config", default=None)
-    ap.add_argument("--adopt", choices=ORDER, nargs="+", metavar="STEP",
-                    help="mark steps whose outputs exist as done without re-running "
-                         "(for runs that pre-date completion stamps; check their logs first)")
+    ap.add_argument(
+        "--adopt",
+        choices=ORDER,
+        nargs="+",
+        metavar="STEP",
+        help="mark steps whose outputs exist as done without re-running "
+        "(for runs that pre-date completion stamps; check their logs first)",
+    )
     a = ap.parse_args()
 
     if a.adopt:
@@ -105,7 +113,8 @@ def main() -> int:
         if rc != 0:
             print(
                 f"✗ {s} failed (exit {rc}) after {time.time() - t0:.0f}s — see logs/run_all/{s}.log",
-                file=sys.stderr, flush=True,
+                file=sys.stderr,
+                flush=True,
             )
             if a.keep_going:
                 failed.append(s)

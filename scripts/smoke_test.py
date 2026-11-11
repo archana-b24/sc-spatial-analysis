@@ -47,7 +47,8 @@ def main() -> None:
 
     t = time.time()
     full = ad.read_h5ad(repo / "data/interim/01_cohort.h5ad", backed="r")
-    # whole samples (as in real data), ~n/4 cells per condition, so per-sample QC/doublets see real sample sizes
+    # whole samples (as in real data), ~n/4 cells per condition,
+    # so per-sample QC/doublets see real sample sizes
     rng = np.random.default_rng(0)
     idx = []
     by_sample = full.obs.groupby(["condition", "sample"], observed=True).indices
@@ -89,14 +90,25 @@ def main() -> None:
     log.info("integration ok → %s\n%s\nextra=%s", chosen, scores.round(3).to_string(), extra)
     log.info("mixing:\n%s", atlas_mixing_per_label(adata, ic["harmonised_label_key"]).head().to_string())
 
-    from lusc_atlas.cnv import annotate_positions, author_label_concordance, gene_positions_from_gtf, run_infercnv
+    from lusc_atlas.cnv import (
+        annotate_positions,
+        author_label_concordance,
+        gene_positions_from_gtf,
+        run_infercnv,
+    )
     from lusc_atlas.de import make_de_groups
 
-    pos = gene_positions_from_gtf(cfg["data"]["gene_positions"]["url"], repo / "data/raw/gencode.v44.basic.annotation.gtf.gz")
+    pos = gene_positions_from_gtf(
+        cfg["data"]["gene_positions"]["url"], repo / "data/raw/gencode.v44.basic.annotation.gtf.gz"
+    )
     annotate_positions(adata, pos)
     cs = run_infercnv(adata, cfg["cnv"], 16, 0)
     make_de_groups(adata, ic["harmonised_label_key"])
-    log.info("CNV ok:\n%s\nconcordance:\n%s", cs.to_string(), author_label_concordance(adata, cfg["cnv"]["author_label_check"]))
+    log.info(
+        "CNV ok:\n%s\nconcordance:\n%s",
+        cs.to_string(),
+        author_label_concordance(adata, cfg["cnv"]["author_label_check"]),
+    )
 
     from lusc_atlas.de import malignant_vs_healthy_basal, pathway_activities, pseudobulk, run_contrast
 
@@ -107,7 +119,11 @@ def main() -> None:
     import pandas as pd
 
     allres = pd.concat([r for r in res if not r.empty], ignore_index=True)
-    log.info("DE ok: %d rows, groups %s", len(allres), allres.groupby("contrast").group.nunique().to_dict() if len(allres) else {})
+    log.info(
+        "DE ok: %d rows, groups %s",
+        len(allres),
+        allres.groupby("contrast").group.nunique().to_dict() if len(allres) else {},
+    )
     if len(allres):
         pw = pathway_activities(allres, cfg["de"]["pathways"])
         log.info("pathways ok: %s", {k: v.shape for k, v in pw.items()})

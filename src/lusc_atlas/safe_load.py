@@ -21,13 +21,25 @@ from .fetch import sha256
 
 # (module, name) pairs that only *construct data*; nothing here can run a shell, import code or eval.
 SAFE_GLOBALS: set[tuple[str, str]] = {
-    ("builtins", "str"), ("builtins", "list"), ("builtins", "dict"), ("builtins", "tuple"),
-    ("builtins", "set"), ("builtins", "int"), ("builtins", "float"), ("builtins", "bool"),
-    ("__builtin__", "list"), ("__builtin__", "unicode"), ("__builtin__", "dict"),  # py2-era aliases
-    ("collections", "OrderedDict"), ("collections", "defaultdict"),
-    ("numpy", "ndarray"), ("numpy", "dtype"),
-    ("numpy.core.multiarray", "_reconstruct"), ("numpy.core.multiarray", "scalar"),
-    ("numpy._core.multiarray", "_reconstruct"), ("numpy._core.multiarray", "scalar"),
+    ("builtins", "str"),
+    ("builtins", "list"),
+    ("builtins", "dict"),
+    ("builtins", "tuple"),
+    ("builtins", "set"),
+    ("builtins", "int"),
+    ("builtins", "float"),
+    ("builtins", "bool"),
+    ("__builtin__", "list"),
+    ("__builtin__", "unicode"),
+    ("__builtin__", "dict"),  # py2-era aliases
+    ("collections", "OrderedDict"),
+    ("collections", "defaultdict"),
+    ("numpy", "ndarray"),
+    ("numpy", "dtype"),
+    ("numpy.core.multiarray", "_reconstruct"),
+    ("numpy.core.multiarray", "scalar"),
+    ("numpy._core.multiarray", "_reconstruct"),
+    ("numpy._core.multiarray", "scalar"),
     ("_codecs", "encode"),  # numpy uses this to re-encode raw byte buffers (latin-1); returns bytes only
 }
 

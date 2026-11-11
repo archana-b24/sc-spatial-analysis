@@ -42,7 +42,9 @@ def study_key(name: str) -> str:
     """
     s = str(name).lower()
     years = re.findall(r"(?:19|20)\d{2}", s)
-    words = [w for w in re.findall(r"[a-z]+", s) if len(w) > 2 and w not in {"unpubl", "unpublished", "et", "al"}]
+    words = [
+        w for w in re.findall(r"[a-z]+", s) if len(w) > 2 and w not in {"unpubl", "unpublished", "et", "al"}
+    ]
     return "|".join(sorted(set(words))) + "#" + (years[0] if years else "")
 
 
@@ -105,13 +107,19 @@ def assign_condition(obs: pd.DataFrame, acfg: dict, ccfg: dict, origin_lookup: d
         sk = obs[acfg["study_col"]].astype(str).map(study_key)
         sid = obs[acfg["sample_col"]].astype(str).map(sample_core_id)
         origin = pd.Series(
-            [next((v for (k, i), v in origin_lookup.items() if i == b and keys_overlap(k, a)), "unknown")
-             for a, b in zip(sk, sid, strict=True)], index=obs.index)
+            [
+                next((v for (k, i), v in origin_lookup.items() if i == b and keys_overlap(k, a)), "unknown")
+                for a, b in zip(sk, sid, strict=True)
+            ],
+            index=obs.index,
+        )
     omap = ccfg["origin_map"]
     cond = pd.Series("excluded", index=obs.index, dtype=object)
     cond[lusc & origin.isin(omap["tumour"])] = "tumour"
     cond[lusc & origin.isin(omap["adjacent_normal"])] = "adjacent_normal"
-    cond[lusc & ~origin.isin(omap["tumour"] + omap["adjacent_normal"] + omap["exclude"])] = "tumour_region_unknown"
+    cond[lusc & ~origin.isin(omap["tumour"] + omap["adjacent_normal"] + omap["exclude"])] = (
+        "tumour_region_unknown"
+    )
     cond[healthy & ~origin.isin(omap["exclude"])] = "healthy"
     return cond
 
@@ -125,7 +133,9 @@ def load_atlas_obs(name: str, acfg: dict, repo: Path) -> tuple[ad.AnnData, pd.Da
     return a, o
 
 
-def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_merged_cohort(
+    cfg: dict,
+) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     repo = Path(cfg["_repo_root"])
     ccfg = cfg["data"]["cohort"]
     atlases = cfg["data"]["atlases"]
@@ -155,25 +165,44 @@ def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFra
     rel = {ccfg["tumour_disease_ontology"]}
     for name, acfg in atlases.items():
         o = obs_all[name]
-        o = o[o["disease_ontology_term_id"].astype(str).isin(rel) | (o["disease"].astype(str) == ccfg["normal_disease"])]
+        o = o[
+            o["disease_ontology_term_id"].astype(str).isin(rel)
+            | (o["disease"].astype(str) == ccfg["normal_disease"])
+        ]
         steps_ = [
-            ("not primary data (duplicate of a cell in another CELLxGENE dataset)", ~o["is_primary_data"].astype(bool)),
+            (
+                "not primary data (duplicate of a cell in another CELLxGENE dataset)",
+                ~o["is_primary_data"].astype(bool),
+            ),
             ("tissue not primary lung", ~o["tissue"].astype(str).isin(ccfg["tissues"])),
-            ("non-UMI assay (read counts; gene-length bias)", o["assay"].astype(str).isin(ccfg["exclude_assays"])),
+            (
+                "non-UMI assay (read counts; gene-length bias)",
+                o["assay"].astype(str).isin(ccfg["exclude_assays"]),
+            ),
         ]
         for reason, m in steps_:
             for (st, cond), n in o[m].groupby(["study", "disease"], observed=True).size().items():
                 if n:
-                    excl.append({"atlas": name, "study": st, "disease": cond, "reason": reason, "n_cells": int(n)})
+                    excl.append(
+                        {"atlas": name, "study": st, "disease": cond, "reason": reason, "n_cells": int(n)}
+                    )
             o = o[~m]
         o = o.copy()
         o["condition"] = assign_condition(o, acfg, ccfg, origin_lookup).values
         o["age_years"] = age_years(o).values
-        drop = (o["condition"] == "excluded") | ((o["condition"] == "healthy") & (o["age_years"] < ccfg["healthy_min_age"]))
+        drop = (o["condition"] == "excluded") | (
+            (o["condition"] == "healthy") & (o["age_years"] < ccfg["healthy_min_age"])
+        )
         for (st, cond), n in o[drop].groupby(["study", "condition"], observed=True).size().items():
             if n:
-                reason = "excluded origin (metastasis/effusion)" if cond == "excluded" else f"healthy donor age < {ccfg['healthy_min_age']}"
-                excl.append({"atlas": name, "study": st, "disease": cond, "reason": reason, "n_cells": int(n)})
+                reason = (
+                    "excluded origin (metastasis/effusion)"
+                    if cond == "excluded"
+                    else f"healthy donor age < {ccfg['healthy_min_age']}"
+                )
+                excl.append(
+                    {"atlas": name, "study": st, "disease": cond, "reason": reason, "n_cells": int(n)}
+                )
         sel[name] = o[~drop]
     exclusions = pd.DataFrame(excl)
 
@@ -181,10 +210,19 @@ def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFra
     rows = []
     for name, o in sel.items():
         for st, g in o.groupby("study", observed=True):
-            rows.append({"atlas": name, "study": st, "study_key": study_key(st), "n_cells": len(g),
-                         "n_donors": g["donor_id"].nunique(),
-                         **{f"n_{c}": int((g["condition"] == c).sum()) for c in
-                            ["tumour", "adjacent_normal", "tumour_region_unknown", "healthy"]}})
+            rows.append(
+                {
+                    "atlas": name,
+                    "study": st,
+                    "study_key": study_key(st),
+                    "n_cells": len(g),
+                    "n_donors": g["donor_id"].nunique(),
+                    **{
+                        f"n_{c}": int((g["condition"] == c).sum())
+                        for c in ["tumour", "adjacent_normal", "tumour_region_unknown", "healthy"]
+                    },
+                }
+            )
     cw = pd.DataFrame(rows)
     cw["overlaps_with"] = ""
     cw["decision"] = "keep"
@@ -207,7 +245,9 @@ def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFra
         cw.at[i, "counts_ok"] = ok
         if not ok:
             cw.at[i, "decision"] = "drop (matrix is not raw integer counts)"
-    keep_pairs = set(zip(cw.loc[cw.decision == "keep", "atlas"], cw.loc[cw.decision == "keep", "study"], strict=True))
+    keep_pairs = set(
+        zip(cw.loc[cw.decision == "keep", "atlas"], cw.loc[cw.decision == "keep", "study"], strict=True)
+    )
 
     # ---- donor table + caps
     donor_rows, parts = [], {}
@@ -220,9 +260,17 @@ def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFra
         chosen = pd.Index(o[is_healthy].index[idx_h]).append(o[~is_healthy].index[idx_d])
         parts[name] = o.loc[chosen]
         for (donor, cond), g in o.groupby(["donor_id", "condition"], observed=True):
-            donor_rows.append({"atlas": name, "donor_id": f"{name}:{donor}", "study": g["study"].iat[0],
-                               "condition": cond, "n_cells_available": len(g),
-                               "n_cells": int(g.index.isin(chosen).sum()), "age_years": g["age_years"].iat[0]})
+            donor_rows.append(
+                {
+                    "atlas": name,
+                    "donor_id": f"{name}:{donor}",
+                    "study": g["study"].iat[0],
+                    "condition": cond,
+                    "n_cells_available": len(g),
+                    "n_cells": int(g.index.isin(chosen).sum()),
+                    "age_years": g["age_years"].iat[0],
+                }
+            )
     donors = pd.DataFrame(donor_rows)
 
     # ---- gene space (C)
@@ -233,8 +281,12 @@ def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFra
         filt = var.get("feature_is_filtered", pd.Series(False, index=var.index)).astype(bool).to_numpy()
         gene_sets[name] = set(ids[~filt])
     shared = sorted(set.intersection(*gene_sets.values()))
-    genes = pd.DataFrame([{"atlas": n, "n_genes": len(g), "n_shared": len(shared), "n_lost": len(g) - len(shared)}
-                          for n, g in gene_sets.items()])
+    genes = pd.DataFrame(
+        [
+            {"atlas": n, "n_genes": len(g), "n_shared": len(shared), "n_lost": len(g) - len(shared)}
+            for n, g in gene_sets.items()
+        ]
+    )
 
     # ---- materialise counts on the shared gene space
     mats, obs_list, symbols = [], [], None
@@ -248,20 +300,41 @@ def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFra
         X = sp.csr_matrix(X)[:, col].astype(np.float32)
         mats.append(X)
         ob = obs_all[name].iloc[pos]
-        keep_cols = ["donor_id", "sample", "study", "assay", "disease", "disease_ontology_term_id", "tissue",
-                     "sex", "development_stage", "cell_type", "cell_type_ontology_term_id", "suspension_type"]
+        keep_cols = [
+            "donor_id",
+            "sample",
+            "study",
+            "assay",
+            "disease",
+            "disease_ontology_term_id",
+            "tissue",
+            "sex",
+            "development_stage",
+            "cell_type",
+            "cell_type_ontology_term_id",
+            "suspension_type",
+        ]
         ob = ob[[c for c in keep_cols if c in ob]].astype(str).copy()
         ob["atlas"] = name
         ob["condition"] = o.loc[ob.index, "condition"].values
         ob["age_years"] = o.loc[ob.index, "age_years"].values
         fine = atlases[name].get("fine_label_col")
-        ob["fine_label"] = obs_all[name].iloc[pos][fine].astype(str).values if fine and fine in obs_all[name] else ob["cell_type"]
+        ob["fine_label"] = (
+            obs_all[name].iloc[pos][fine].astype(str).values
+            if fine and fine in obs_all[name]
+            else ob["cell_type"]
+        )
         for c in ("donor_id", "sample"):
             ob[c] = name + ":" + ob[c]
         ob.index = name + ":" + ob.index.astype(str)
         obs_list.append(ob)
         if symbols is None and "feature_name" in var:
-            symbols = pd.Series(var["feature_name"].astype(str).values, index=ids).groupby(level=0).first().reindex(shared)
+            symbols = (
+                pd.Series(var["feature_name"].astype(str).values, index=ids)
+                .groupby(level=0)
+                .first()
+                .reindex(shared)
+            )
     for a in handles.values():
         a.file.close()
 
@@ -276,6 +349,10 @@ def build_merged_cohort(cfg: dict) -> tuple[ad.AnnData, pd.DataFrame, pd.DataFra
     for c in adata.obs.columns:
         if adata.obs[c].dtype == object:
             adata.obs[c] = adata.obs[c].astype("category")
-    log.info("merged cohort: %d cells × %d genes; conditions %s", adata.n_obs, adata.n_vars,
-             adata.obs["condition"].value_counts().to_dict())
+    log.info(
+        "merged cohort: %d cells × %d genes; conditions %s",
+        adata.n_obs,
+        adata.n_vars,
+        adata.obs["condition"].value_counts().to_dict(),
+    )
     return adata, donors, cw, genes, exclusions

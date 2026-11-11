@@ -190,7 +190,8 @@ def build_report(cfg: dict) -> None:
     mix = _read(cfg, "atlas_mixing_per_label.csv")
     if mix is not None:
         sec += [
-            "Atlas mixing within harmonised cell types (higher = better integrated; compare with random expectation):",
+            "Atlas mixing within harmonised cell types "
+            "(higher = better integrated; compare with random expectation):",
             "",
             mix.round(3).to_markdown(index=False),
             "",
@@ -216,7 +217,8 @@ def build_report(cfg: dict) -> None:
             "",
             tr.round(3).to_markdown(index=False),
             "",
-            "_Interpretation: transcriptional distance from healthy basal cells; malignant cells are patient-clonal, so this is not lineage tracing._",
+            "_Interpretation: transcriptional distance from healthy basal cells; "
+            "malignant cells are patient-clonal, so this is not lineage tracing._",
             "",
         ]
     sec += ["## 8. Spatial (Visium, n = 1 section — descriptive)", ""] + fig_spatial(cfg) + [""]
@@ -226,9 +228,23 @@ def build_report(cfg: dict) -> None:
             "## 9. Differential cell–cell communication (top 20)",
             "",
             dccc.head(20)[
-                [c for c in ("source", "target", "ligand_complex", "receptor_complex", "ligand_stat",
-                             "receptor_stat", "interaction_stat", "interaction_padj") if c in dccc.columns]
-            ].round(3).to_markdown(index=False),
+                [
+                    c
+                    for c in (
+                        "source",
+                        "target",
+                        "ligand_complex",
+                        "receptor_complex",
+                        "ligand_stat",
+                        "receptor_stat",
+                        "interaction_stat",
+                        "interaction_padj",
+                    )
+                    if c in dccc.columns
+                ]
+            ]
+            .round(3)
+            .to_markdown(index=False),
             "",
             f"_Ligand/receptor DESeq2 Wald stats from contrast `{cfg['ccc']['de_contrast']}`; "
             "interaction_stat = their mean (LIANA+ `df_to_lr`)._",
@@ -241,9 +257,14 @@ def build_report(cfg: dict) -> None:
             "(Visium, global bivariate Moran's R, top 15)",
             "",
             sccc.head(15)[
-                [c for c in ("interaction", "morans", "morans_pvals", "ligand_props", "receptor_props")
-                 if c in sccc.columns]
-            ].round(3).to_markdown(index=False),
+                [
+                    c
+                    for c in ("interaction", "morans", "morans_pvals", "ligand_props", "receptor_props")
+                    if c in sccc.columns
+                ]
+            ]
+            .round(3)
+            .to_markdown(index=False),
             "",
         ]
 
