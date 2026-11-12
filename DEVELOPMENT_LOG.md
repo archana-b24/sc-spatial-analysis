@@ -246,7 +246,7 @@ HLCA healthy lung is AT2/AT1/macrophage-rich; tumours are immune- and malignant-
 ### 3.4 ✅ QC & doublets — per sample, both conditions — *resolves S2, S6*
 v1: global 98th-percentile cutoff, control filtered with the tumour threshold (bug), doublets on tumour only. v2: MAD outliers **per sample** (Heumos 2023), Scrublet + scVI-SOLO **per sample on every sample**, cell removed only when both agree.
 
-**Result:** 246,350 cells in → **231,504 kept** across **215 samples** (160 donors, 20 studies). 13,203 MAD outliers; 672 consensus doublets. The two doublet callers disagree strongly: SOLO flags 41,531 cells (17 %), Scrublet 2,082 (0.8 %), so the "both agree" rule effectively removes only what Scrublet finds (see §3.10 item 5).
+**Result:** `select` gave 249,402 cells from 160 donors; 26 samples with < 200 cells (`qc.min_cells_per_sample`; 3,052 cells) were dropped before per-sample QC, which removed 9 donors entirely. 246,350 cells in → **231,504 kept** across **215 samples** (**151 donors**, 20 studies). *(Corrected 2026-11-12: this line previously said 160 donors, the pre-QC cohort count; verified against the post-QC object and `logs/run_all/qc.log`, see docs/v3/C_dashboard_hosting.md §4.)* 13,203 MAD outliers; 672 consensus doublets. The two doublet callers disagree strongly: SOLO flags 41,531 cells (17 %), Scrublet 2,082 (0.8 %), so the "both agree" rule effectively removes only what Scrublet finds (see §3.10 item 5).
 
 ### 3.5 ✅ Malignant-cell calling (infercnvpy) — *resolves S7*
 v1: none. v2: inferCNV against immune/endothelial/stromal reference; threshold = 95th percentile of CNV score in healthy-donor epithelium; malignant = epithelial ∧ tumour sample ∧ above threshold; LUSC chr3q gain checked as a positive control.
@@ -329,7 +329,7 @@ The pipeline ran end to end, but reading the outputs (not just the exit codes) s
 
 ## 4. Looking ahead: v3 — AI-native
 
-⏳ To be scoped after v2.0.0 ships. Direction: each pipeline step is already a pure function with declared inputs/outputs (`lusc_atlas.steps`) — exactly the shape an agent tool or **Claude Skill** needs. v3 candidates: a `lusc-atlas` Skill that runs/inspects steps and explains results; an MCP server over the processed AnnData/SpatialData objects; agent-assisted annotation review (cf. CellAgent, scAgent, Biomni — all early, human review required).
+🔍 **Concepts prototyped 2026-11-12 in [docs/v3/](docs/v3/README.md)** (agentic "Ask the atlas" with read-only DuckDB tools, provenance and an eval set; Nemotron assessment; dashboard explainers + hosting bundle). Original note: ⏳ To be scoped after v2.0.0 ships. Direction: each pipeline step is already a pure function with declared inputs/outputs (`lusc_atlas.steps`) — exactly the shape an agent tool or **Claude Skill** needs. v3 candidates: a `lusc-atlas` Skill that runs/inspects steps and explains results; an MCP server over the processed AnnData/SpatialData objects; agent-assisted annotation review (cf. CellAgent, scAgent, Biomni — all early, human review required).
 
 ---
 
@@ -361,7 +361,7 @@ v2 turns each one into something that survives expert questioning. Checked again
 
 > *Spatial transcriptomics of squamous lung cancer (v2, reproducible pipeline).* Led a five-member team;
 > rebuilt the analysis as a tested, Snakemake/pixi-pinned Python package. Merged two curated atlases (HLCA +
-> LuCA; **231,504** cells after QC, **160** donors, **20** studies) with explicit deduplication, gene-space and
+> LuCA; **231,504** cells after QC, **151** donors, **20** studies) with explicit deduplication, gene-space and
 > Cell-Ontology label harmonisation; benchmarked seven embeddings (incl. scVI/scANVI/sysVI/Harmony, scArches and
 > a Geneformer foundation-model baseline) with scib-metrics and an over-correction guard (scANVI selected).
 > Called **3,942** malignant cells by inferred CNV (chr3q-gain validated), ran donor-paired pseudobulk DESeq2
@@ -397,3 +397,6 @@ the scCODA directions (#2) should not be quoted yet.
 | 2026-11-10 | Rescoped tensor's rank search (`upper_rank=12`) projected > 15 h (rank 1 11.5 min, rank 2 ~30 min) → stopped; ceiling made configurable and set to 8 (§3.9); `ccc` + `report` relaunched 15:52 |
 | 2026-11-10 | ✓ ccc 5.3 h (elbow rank 5, below the ceiling of 8) · ✓ report 65 s → **full pipeline complete** (21:13 PST); all 15 steps stamped |
 | 2026-11-11 | Post-run output review → results written into §3.4–3.9; 7 open issues in §3.10 (Milo contrast bug; `Unknown` holds ~25k un-called malignant cells; Rare-epithelial cell2location artefact; tensor factors not condition-specific; SOLO/Scrublet disagreement; atlas mixing; stale report provenance); §5 wording filled; README results section |
+| 2026-11-11 | v2.1 dashboard built on branch `v2.1-dashboard` (ROADMAP_v2.1 §6): new `export` step → DuckDB serving snapshot (118 MB, derived, never source of truth) in a separate pixi env `dashboard`; Streamlit app with one page per stage (question → decision → evidence → known-issue banners); page-render tests. Building it surfaced a count discrepancy: the post-QC object holds **151** donors, not the 160 quoted in §3.4 (160 = `cohort_donors`, pre-QC; 8 small healthy HLCA donors + 1 LuCA tumour donor have no cells in `sc_annotated.h5ad`) — to verify and correct |
+| 2026-11-12 | **Zero-cost decision:** project must stay free → "Ask the atlas" chatbot page removed from the dashboard and the deploy bundle (needs a paid LLM key; page parked outside the repo); anthropic/openai dropped from app/requirements.txt; hosting = Streamlit Community Cloud + HF Dataset. Agent library, eval and MCP server kept, unwired (docs/v3/README.md decision note). |
+| 2026-11-12 | v3 concepts (docs/v3/README.md), additive and uncommitted: **A** agentic layer `src/lusc_atlas/agent/` (11 read-only DuckDB tools incl. 8 curated, caveat-aware; Claude default + OpenAI-compatible Nemotron provider; tool-use loop with SQL provenance and a post-hoc number-grounding check; MCP server; "Ask the atlas" page; 24-question eval with SQL-computed truths, not yet run live: no keys); **B** Nemotron assessment (open-weights fallback, no GPU here, hosted API prototyping-only); **C** DuckDB enforced as the single serving source of truth (schema contract + runtime-read tests, schema v2: page_guide, glossary, step_stamps, config/content hashes), Start-here page + computed reader guide on every stage page + glossary, HF Docker-Space bundle + `deploy_space.sh` (not run) + local dry deploy (16/16 pages, 435 MB). Finding: HF Docker/Gradio Spaces now need a paid plan; Streamlit SDK deprecated 2025-04-30. §3.4 donor count corrected 160 → 151 post-QC (wording only) |

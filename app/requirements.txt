@@ -1,0 +1,11 @@
+# Hosted runtime for the dashboard on Streamlit Community Cloud (free; it reads the requirements file next to the
+# entrypoint first). App-only subset of the pixi `dashboard` env, exact versions from pixi.lock; Python 3.12.
+# scripts/cloud_dry_run.sh installs exactly this file into a fresh venv and renders every page.
+streamlit==1.67.0
+duckdb==2.0.0
+plotly==7.1.0
+pandas==2.3.3
+numpy==2.5.4
+pyarrow==26.0.1
+pillow==13.0.0
+huggingface-hub==2.4.0

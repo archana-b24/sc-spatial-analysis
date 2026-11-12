@@ -54,6 +54,26 @@ diverge. Each step can also be run directly: `pixi run lusc-atlas <step>` (`pixi
 `data/processed/*.h5ad`, `data/processed/visium.spatialdata.zarr`, per-step provenance in
 `results/reports/provenance/`.
 
+### Results dashboard (v2.1, in progress)
+
+An interactive Streamlit site with one page per pipeline stage. Each page pairs the decision with the evidence
+behind it and shows the known caveats. It reads a DuckDB snapshot that the `export` step derives from pipeline
+outputs (design: `docs/ROADMAP_v2.1.md` §6).
+
+```bash
+pixi run -e dashboard export      # pipeline outputs → results/dashboard/lusc_atlas.duckdb (~1 min)
+pixi run -e dashboard app         # http://localhost:8501
+```
+
+v3 preview (prototypes, `docs/v3/README.md`): a *Start here* guide and computed reader guide on every page, plus the
+atlas's read-only DuckDB tools exposed as an MCP server. (The in-app chatbot is parked: the project stays free to
+host and run, and a chatbot needs a paid LLM API key.)
+
+```bash
+pixi run -e dashboard mcp                                                  # same tools as an MCP server
+pixi run -e dashboard cloud-dry-run                                       # free deploy rehearsal (clean clone + fresh venv)
+```
+
 ## Data
 
 All inputs are downloaded by the pipeline from pinned, public sources and checksum-verified.

@@ -13,6 +13,7 @@ legacy/v1/visium_spaceranger_outputs_untracked/
 logs/*.log
 # per-step logs + .done/ completion stamps: machine-local run state (DEVELOPMENT_LOG §2.6)
 logs/run_all/
+logs/smoke/
 .ipynb_checkpoints/
 __pycache__/
 *.egg-info/
@@ -25,3 +26,11 @@ figures/
 .DS_Store
 .vscode/
 .idea/
+
+# --- dashboard: derived serving snapshot, rebuilt by `lusc-atlas export` ---
+results/dashboard/
+.streamlit/secrets.toml
+
+# --- v3: generated Space bundle and local agent-eval outputs ---
+build/
+logs/agent_eval/

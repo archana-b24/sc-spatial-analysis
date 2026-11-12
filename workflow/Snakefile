@@ -25,6 +25,7 @@ MEM_MB = {"select": 100_000, "integrate": 64_000, "qc": 48_000, "cnv": 64_000, "
 rule all:
     input:
         OUTPUTS["report"],
+        OUTPUTS["export"],
 
 
 for _step in ORDER:

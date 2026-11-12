@@ -229,3 +229,14 @@ ccc:
   tensor_outer_fraction: 0.333  # keep cells / LR pairs present in ≥1/3 of tensor samples
   tensor_exclude_labels: [Unknown]
   spatial_bandwidth: 200
+
+# -----------------------------------------------------------------------------
+# Dashboard serving snapshot (step `export`, docs/ROADMAP_v2.1.md §6) — presentation only, no analysis
+# -----------------------------------------------------------------------------
+dashboard:
+  subsample_cells: 50000          # cells with per-cell marker expression (UMAP gene colouring); metadata kept for all
+  marker_top_de_per_group: 15     # + top |Wald stat| genes per DE contrast × cell type
+  marker_top_hvg: 500             # + top highly variable genes
+  visium_top_svg: 200             # spot-level expression for top spatially variable genes (Moran's I)
+  ccc_magnitude_rank_max: 0.01    # per-sample LIANA rows shipped (2.2 M rows / 483 MB otherwise)
+

@@ -40,6 +40,7 @@ OUTPUTS = {
     "spatial": ["data/processed/visium.h5ad", "results/tables/spatial_niches.csv"],
     "ccc": ["results/tables/ccc_by_sample.csv"],
     "report": ["results/reports/summary.md"],
+    "export": ["results/dashboard/lusc_atlas.duckdb"],
 }
 INPUTS = {
     "fetch_visium": [],
@@ -60,10 +61,18 @@ INPUTS = {
         "results/tables/de_pseudobulk.csv",
         "data/processed/visium.h5ad",
     ],
-    "report": [o for k, v in OUTPUTS.items() if k not in ("report",) for o in v],
+    "report": [o for k, v in OUTPUTS.items() if k not in ("report", "export") for o in v],
+    # dashboard snapshot (ROADMAP_v2.1 §6): reads tables + processed objects, never feeds back into analysis.
+    # docs/dashboard_content.yaml is a tracked source file (like config.yaml), so it is not a declared input.
+    "export": [
+        "results/reports/summary.md",
+        "data/processed/sc_annotated.h5ad",
+        "data/processed/lineage.h5ad",
+        "data/processed/visium.h5ad",
+    ],
 }
 ORDER = list(OUTPUTS)
-ENV = {"deconvolve": "c2l"}  # every other step runs in the `default` pixi env
+ENV = {"deconvolve": "c2l", "export": "dashboard"}  # every other step runs in the `default` pixi env
 
 
 def _p(cfg: dict, rel: str) -> Path:
@@ -88,6 +97,7 @@ def _provenance(cfg: dict, step: str, t0: float, extra: dict | None = None) -> N
         "liana",
         "cell2location",
         "torch",
+        "duckdb",
         "numpy",
         "pandas",
         "lusc-atlas",
@@ -438,6 +448,12 @@ def report(cfg: dict) -> None:
     from .report import build_report
 
     build_report(cfg)
+
+
+def export(cfg: dict) -> None:
+    from .export import build_dashboard_db
+
+    build_dashboard_db(cfg, _p(cfg, OUTPUTS["export"][0]))
 
 
 STEPS = {name: globals()[name] for name in ORDER}

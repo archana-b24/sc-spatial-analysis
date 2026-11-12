@@ -92,17 +92,56 @@ python = "3.13.*"
 snakemake = ">=9.27"
 pyyaml = "*"
 
+
+# --------------------------------------------------------------- dashboard env
+# Results dashboard (docs/ROADMAP_v2.1.md §6): the `export` step (pipeline outputs → DuckDB) and the
+# Streamlit app. Kept separate so web dependencies never touch the analysis lock; app/requirements.txt
+# mirrors the app-only subset for Hugging Face Spaces.
+[feature.dashboard.dependencies]
+python = "3.12.*"
+
+[feature.dashboard.pypi-dependencies]
+lusc-atlas = { path = ".", editable = true }
+pandas = ">=2.3,<3"
+numpy = "*"
+scipy = "*"
+h5py = "*"
+anndata = ">=0.11"
+pyyaml = "*"
+pyarrow = "*"
+duckdb = ">=1.1"
+streamlit = ">=1.40"
+plotly = ">=5.24"
+pillow = "*"
+pytest = "*"
+# v3 agent (docs/v3/A_agentic_research.md): optional LLM providers + MCP server. Imported lazily, so the
+# dashboard runs without them and without any API key.
+anthropic = "*"   # Claude (default provider)
+openai = "*"      # OpenAI-compatible client → NVIDIA NIM / build.nvidia.com (Nemotron)
+mcp = "*"         # Model Context Protocol server exposing the same atlas tools
+huggingface-hub = "*"  # app/lib/db.py fetches the snapshot from an HF Dataset when deployed; publish_dataset.sh
+
 [environments]
 default = { features = ["main"] }
 c2l = { features = ["c2l"], no-default-feature = true }
 workflow = { features = ["workflow"], no-default-feature = true }
+dashboard = { features = ["dashboard"], no-default-feature = true }
 
 [tasks]
 fetch = "python scripts/run_all.py --only fetch"
 run-all = "python scripts/run_all.py"
 test = "pytest -q"
-lint = "ruff check src scripts tests"
+lint = "ruff check src scripts tests app"
 
 [feature.workflow.tasks]
 smk = "snakemake -s workflow/Snakefile --cores 16"
 smk-dry = "snakemake -s workflow/Snakefile -n"
+
+[feature.dashboard.tasks]
+export = "lusc-atlas export"
+app = "streamlit run app/streamlit_app.py --server.headless true --server.port 8501"
+# v3 (docs/v3/README.md)
+mcp = "python -m lusc_atlas.agent.mcp_server"             # MCP stdio server over the same read-only tools
+# free hosting only (docs/v3/C_dashboard_hosting.md "Cost: $0"): Streamlit Community Cloud + public HF Dataset
+cloud-dry-run = "bash scripts/cloud_dry_run.sh"           # clean clone + fresh py3.12 venv + secrets + offline HF fetch
+publish-dataset = "bash scripts/publish_dataset.sh"       # YOU run it: DB → public HF Dataset (needs HF_TOKEN; never a Space)

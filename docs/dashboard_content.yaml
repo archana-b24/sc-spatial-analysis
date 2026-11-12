@@ -1,0 +1,255 @@
+# Curated "why" content for the results dashboard (loaded by `lusc-atlas export` into the
+# `decisions` and `known_issues` tables). Every entry cites the DEVELOPMENT_LOG section it summarises;
+# the log stays the full record. Keep wording plain: the dashboard is for readers without a coding background.
+#
+# stage ∈ cohort | qc | integration | malignant | de | composition | trajectory | spatial | ccc | provenance
+
+decisions:
+  - stage: cohort
+    question: Is the Human Lung Cell Atlas (HLCA) alone enough to compare LUSC tumour with normal lung?
+    decision: No. Combine HLCA (healthy reference) with the LuCA extended atlas (LUSC tumours and matched adjacent tissue).
+    why: HLCA contains only 3 LUSC donors from a single study, so tumour vs normal would be n = 3 and fully confounded with study.
+    evidence: cohort_donors, merge_study_crosswalk
+    log_ref: "§3.2"
+  - stage: cohort
+    question: How do we stop the same patient being counted twice?
+    decision: Keep only CELLxGENE primary-data cells, then build a study crosswalk and take each study from exactly one atlas.
+    why: LuCA redistributes studies that HLCA also contains (360,842 non-primary LuCA cells). Duplicates inflate donor counts and fake good integration.
+    evidence: merge_study_crosswalk, merge_exclusions
+    log_ref: "§3.3 A"
+  - stage: cohort
+    question: Which genes and conditions can be compared across atlases?
+    decision: Join on Ensembl IDs (17,457 shared genes); use four conditions (tumour, adjacent_normal, healthy, tumour_region_unknown); drop Smart-seq2.
+    why: Gene symbols drift between annotations; adjacent tissue from a cancer patient is not healthy lung; Smart-seq2 read counts are not comparable with UMI counts.
+    evidence: merge_gene_space
+    log_ref: "§3.3 B–D"
+  - stage: qc
+    question: How are low-quality cells and doublets removed?
+    decision: Outliers by median absolute deviation, computed per sample; doublets removed only when Scrublet and scVI-SOLO agree.
+    why: One global cutoff (v1) treats deeply and shallowly sequenced samples alike and filtered controls with the tumour threshold.
+    evidence: qc_per_sample
+    log_ref: "§3.4"
+  - stage: integration
+    question: Which integration method produces the shared embedding?
+    decision: Benchmark 7 candidates (PCA, Harmony, scVI, scANVI, sysVI, scArches onto the HLCA model, zero-shot Geneformer) with scIB metrics and a kNN label-purity guard against over-correction.
+    why: Atlas merges have strong batch effects; the method must remove study effects without erasing tumour-specific biology. Batch key = sample, never atlas.
+    evidence: integration_benchmark, atlas_mixing_per_label
+    log_ref: "§3.3 F–G"
+  - stage: integration
+    question: Is integrated (corrected) expression used for statistics?
+    decision: No. The embedding is only used for neighbours, UMAP, clustering and label transfer. DE always uses raw counts.
+    why: Corrected values are not counts and their variance is distorted.
+    evidence: de_pseudobulk
+    log_ref: "§3.3 H"
+  - stage: malignant
+    question: Which epithelial cells are malignant?
+    decision: inferCNV against immune/stromal references; threshold = 95th percentile of the CNV score in healthy epithelium; chr3q gain as positive control.
+    why: Author labels differ between atlases. Copy-number evidence is label-free, and chr3q gain is the hallmark LUSC event.
+    evidence: cnv_summary, cnv_vs_author_malignant, cnv_malignant_per_donor
+    log_ref: "§3.5"
+  - stage: de
+    question: How is tumour compared with normal tissue?
+    decision: Pseudobulk per sample × cell type with PyDESeq2. Primary contrast is paired within patient (~ donor + condition, tumour vs adjacent).
+    why: Cell-level tests treat cells as independent replicates (pseudoreplication). Pairing cancels donor and study effects by design.
+    evidence: de_pseudobulk
+    log_ref: "§3.6"
+  - stage: de
+    question: How are pathway and transcription-factor activities scored?
+    decision: decoupler 2.x on the DESeq2 Wald statistic with PROGENy, CollecTRI and MSigDB Hallmark.
+    why: Scoring the gene-level statistic keeps the paired design; no cell-level permutation.
+    evidence: pathways_progeny, pathways_collectri, pathways_hallmark
+    log_ref: "§3.6"
+  - stage: composition
+    question: Do cell-type proportions change in tumours?
+    decision: scCODA (Bayesian compositional model) per sample, plus Milo neighbourhood testing.
+    why: Proportions are compositional; when one type expands, all others shrink. Raw proportion tests ignore this.
+    evidence: composition_sccoda, milo_nhoods
+    log_ref: "§3.6"
+  - stage: trajectory
+    question: How far are malignant cells from normal basal cells?
+    decision: Palantir pseudotime rooted in a healthy basal cell, plus CellRank 2 (CytoTRACE + pseudotime kernels).
+    why: Reported as transcriptional distance from normal basal, not lineage tracing. Tumour cells are patient-clonal.
+    evidence: trajectory_summary, lineage_cells
+    log_ref: "§3.7"
+  - stage: spatial
+    question: Which cell types sit where in the tissue section?
+    decision: cell2location deconvolution with signatures from the single-cell atlas, squidpy statistics and CellCharter niches.
+    why: A Visium spot holds several cells, so one label per spot (v1) is wrong. n = 1 section, so results are descriptive only.
+    evidence: c2l_abundance, spatial_niches, spatial_svg
+    log_ref: "§3.8"
+  - stage: ccc
+    question: How do cells communicate, and what changes in tumour?
+    decision: LIANA+ per sample in every condition, differential CCC from the paired DE, Tensor-cell2cell programmes (elbow rank 5), and spatial bivariate ligand–receptor co-expression.
+    why: v1 pooled tumour cells only, so nothing could be compared. Per-sample results keep donors as the unit.
+    evidence: ccc_differential, ccc_tensor_contexts, ccc_spatial_bivariate
+    log_ref: "§3.9"
+  - stage: provenance
+    question: Can every number on this site be reproduced?
+    decision: One config file, pinned pixi environments, per-step provenance, and this database rebuilt from pipeline outputs by the export step.
+    why: "Two layers, each with one job. The pipeline's h5ad/zarr objects and results/tables are the computational source of truth (reproducible from code + config). The DuckDB file is the single serving source of truth: this site reads nothing else, and it is rebuilt from scratch from pipeline outputs, so it cannot drift from the code."
+    evidence: step_runs, meta
+    log_ref: "§2"
+
+known_issues:
+  - id: 1
+    stage: composition
+    severity: high
+    title: Milo tested the wrong contrast
+    detail: Milo compared `tumour_region_unknown` (2 donors) with adjacent normal instead of tumour vs adjacent, so its 0 significant neighbourhoods are meaningless, not a null result.
+    status: open
+    log_ref: "§3.10 #1"
+  - id: 2
+    stage: de
+    severity: high
+    title: "`Unknown` holds ~25k un-called malignant cells"
+    detail: Of 29,172 author-labelled malignant cells, only 3,903 pass the conservative CNV threshold. The rest fall into `Unknown`, which also served as the scCODA reference type. Treat `Unknown` results and scCODA directions with care.
+    status: open
+    log_ref: "§3.10 #2"
+  - id: 3
+    stage: spatial
+    severity: high
+    title: Rare epithelial absorbs tumour signal in cell2location
+    detail: A 66-cell reference type gets 66 % of the tumour niche. Per-type spatial abundances for epithelium should not be quoted until this is fixed.
+    status: open
+    log_ref: "§3.10 #3"
+  - id: 4
+    stage: ccc
+    severity: medium
+    title: Tensor factors do not separate tumour from adjacent
+    detail: All Mann–Whitney p ≥ 0.31 on sample loadings. The factors describe sample-level programmes, most likely tracking donor and study.
+    status: documented
+    log_ref: "§3.10 #4"
+  - id: 5
+    stage: qc
+    severity: low
+    title: SOLO and Scrublet disagree
+    detail: SOLO flags 17 % of cells and Scrublet 0.8 %. The consensus rule makes doublet removal effectively Scrublet-only.
+    status: documented
+    log_ref: "§3.10 #5"
+  - id: 6
+    stage: integration
+    severity: medium
+    title: Atlas mixing is below random for every cell type
+    detail: Partly expected (HLCA is mostly healthy, LuCA mostly tumour), but it limits cross-atlas claims.
+    status: documented
+    log_ref: "§3.10 #6"
+  - id: 8
+    stage: ccc
+    severity: medium
+    title: Malignant cells are not in the tensor
+    detail: Too few samples have ≥ 10 malignant cells. Malignant communication is covered by per-sample LIANA and spatial LR instead.
+    status: documented
+    log_ref: "§3.9"
+
+# ------------------------------------------------------------------------------------------------- v3
+# Reader guide (v3, 2026-11-12; docs/v3/C_dashboard_hosting.md). Loaded by `export` into `page_guide` and
+# `glossary`. Only the static parts live here: "what you're looking at" and "how to read it". The "what it
+# means" sentences are computed from the database when the page renders (app/lib/explain.py), so they can
+# never disagree with the numbers on the page.
+page_guide:
+  - stage: cohort
+    order: 1
+    title: "Cohort & merge"
+    one_line: Who is in the data, and how two public atlases were combined without counting anyone twice.
+    what: Counts of donors, samples and cells per atlas and condition, the study-by-study crosswalk between the two atlases, and everything that was excluded.
+    how: Each bar is a number of cells or donors. "Paired" patients gave both a tumour sample and an adjacent-normal sample; they are the backbone of the main comparison because each patient is their own control.
+  - stage: qc
+    order: 2
+    title: "Quality control"
+    one_line: Which cells were removed as damaged, empty or doublets.
+    what: Per-sample sequencing depth, the fraction of cells kept, and how many cells two doublet detectors flagged.
+    how: Points far to the left in the depth plot are shallowly sequenced samples. Thresholds are relative to each sample (median absolute deviations), so a shallow sample is not penalised for being shallow.
+  - stage: integration
+    order: 3
+    title: "Integration"
+    one_line: Putting 20 studies on one map without erasing biology.
+    what: A benchmark of seven integration methods, the chosen method's UMAP, how well the two atlases mix within each cell type, and a label-transfer check.
+    how: Higher scIB scores are better (0–1). "Bio conservation" rewards keeping cell types apart; "batch correction" rewards mixing studies. A method that scores high on batch but low on biology has over-corrected.
+  - stage: malignant
+    order: 4
+    title: "Malignant cells"
+    one_line: Telling tumour cells from normal epithelium using inferred copy-number changes.
+    what: CNV scores per group of cells, the chr3q gain that marks LUSC, agreement with the original authors' labels, and malignant cells per patient.
+    how: A cell is called malignant when its CNV score exceeds the 95th percentile of healthy epithelium. Precision says how often a call is right; sensitivity says how many true tumour cells are found.
+  - stage: de
+    order: 5
+    title: "DE & pathways"
+    one_line: Which genes and pathways change in tumour tissue, cell type by cell type.
+    what: Pseudobulk differential expression (one value per sample × cell type), volcano plots, pathway and transcription-factor activity.
+    how: log2 fold change > 0 means higher in tumour (×2 per unit). padj is the p-value after correcting for testing thousands of genes; below 0.05 is called significant. Bigger dots/higher points = stronger evidence, not necessarily bigger effects.
+  - stage: composition
+    order: 6
+    title: "Composition"
+    one_line: Do tumours contain different proportions of cell types?
+    what: scCODA's credible changes in cell-type proportions, raw per-sample proportions, and Milo neighbourhood testing.
+    how: Proportions are compositional (they add up to 100 %), so scCODA measures change relative to a reference cell type. An inclusion probability ≥ 0.8 means the model is confident the proportion changed.
+  - stage: trajectory
+    order: 7
+    title: "Trajectory"
+    one_line: How far malignant cells have moved, transcriptionally, from healthy basal cells.
+    what: Basal and malignant cells on their own map, coloured by Palantir pseudotime (0 = a healthy basal cell).
+    how: Pseudotime here is a distance in expression space, not time and not ancestry. Higher values = less like healthy basal cells.
+  - stage: spatial
+    order: 8
+    title: "Spatial"
+    one_line: Where the cell types sit in one real LUSC tissue section.
+    what: The H&E image with Visium spots coloured by niche, deconvolved cell-type abundance or gene expression; niche composition; co-localisation; spatially variable genes.
+    how: A Visium spot (55 µm) holds several cells, so each spot gets estimated abundances of every cell type rather than one label. There is one section (n = 1), so everything here is descriptive.
+  - stage: ccc
+    order: 9
+    title: "Cell–cell communication"
+    one_line: Which ligand–receptor signals between cell types change in tumours.
+    what: Differential ligand–receptor scores (tumour vs adjacent), sample-level communication programmes (tensor factors), spatial ligand–receptor co-expression and a per-sample browser.
+    how: A sender cell type expresses the ligand; a receiver expresses the receptor. A high interaction statistic means both partners go up in tumour. These are predictions from expression, not measured binding.
+
+glossary:
+  - term: LUSC
+    definition: Lung squamous cell carcinoma, a non-small-cell lung cancer arising from the airway's basal/squamous cells. (Not SCLC, which is small-cell lung cancer.)
+  - term: HLCA
+    definition: Human Lung Cell Atlas (core + extended), a curated integration of many healthy and diseased lung scRNA-seq studies. Supplies the healthy reference here.
+  - term: LuCA
+    definition: Lung Cancer Atlas (extended), an integrated single-cell atlas of lung tumours and adjacent tissue. Supplies the LUSC tumours here.
+  - term: Adjacent normal
+    definition: Non-tumour lung tissue taken from the same cancer patient, away from the tumour. Not the same as healthy lung from a donor without cancer.
+  - term: Paired design
+    definition: Comparing tumour with adjacent-normal tissue within the same patient, so differences between patients and studies cancel out.
+  - term: Pseudobulk
+    definition: Summing the counts of all cells of one type in one sample into a single profile, so that samples (not cells) are the unit of statistics.
+  - term: Pseudoreplication
+    definition: Treating thousands of cells from a few people as independent replicates. It makes p-values far too small; pseudobulk avoids it.
+  - term: log2 fold change (log2FC)
+    definition: How much higher (positive) or lower (negative) a gene is in the case group, on a log2 scale. +1 = twice as high; −1 = half.
+  - term: padj
+    definition: Adjusted p-value (Benjamini–Hochberg false discovery rate). Corrects for testing thousands of genes; padj < 0.05 is the significance cut used here.
+  - term: UMAP
+    definition: A 2-D map of cells in which similar cells sit close together. Distances between far-apart clusters are not meaningful.
+  - term: Integration / batch effect
+    definition: Technical differences between studies (lab, chemistry, depth) that can look like biology. Integration methods remove them from the embedding used for maps and clustering.
+  - term: scIB
+    definition: A benchmark suite that scores integration on biology conservation and batch removal.
+  - term: scANVI
+    definition: A semi-supervised deep generative model (scvi-tools) that integrates batches using known cell-type labels; the method chosen here.
+  - term: CNV / inferCNV
+    definition: Copy-number variation inferred from expression of genes along each chromosome. Tumour cells gain or lose chromosome segments; normal cells do not.
+  - term: chr3q gain
+    definition: Extra copies of the long arm of chromosome 3 (SOX2, TP63, PIK3CA), the hallmark copy-number event of LUSC; used as a positive control.
+  - term: scCODA
+    definition: A Bayesian model for changes in cell-type proportions that respects that proportions sum to one. Reports log2 fold changes relative to a reference type and an inclusion probability.
+  - term: Milo
+    definition: Differential-abundance testing on overlapping neighbourhoods of similar cells instead of predefined cell types.
+  - term: Pseudotime
+    definition: A cell's position along an inferred continuum from a chosen root cell. Here, transcriptional distance from healthy basal cells; not lineage tracing.
+  - term: Visium spot
+    definition: A 55 µm capture area on the 10x Visium slide; each spot measures the pooled RNA of several cells.
+  - term: cell2location
+    definition: A Bayesian model that estimates how many cells of each single-cell-defined type are in each spatial spot (deconvolution).
+  - term: Niche
+    definition: A group of spots with similar cellular neighbourhoods (CellCharter clustering of neighbour-aggregated features).
+  - term: Moran's I
+    definition: Spatial autocorrelation. Near 1 = a gene's expression is spatially clustered; near 0 = spatially random.
+  - term: Ligand–receptor (LR) interaction
+    definition: A predicted signal from a sender cell expressing a ligand to a receiver cell expressing its receptor, scored from expression (LIANA+).
+  - term: Tensor-cell2cell
+    definition: A tensor decomposition of samples × LR pairs × senders × receivers into a few communication programmes (factors).
+  - term: DuckDB snapshot
+    definition: The single read-only database this site reads from. It is rebuilt from pipeline outputs by the `export` step and never edited by hand.

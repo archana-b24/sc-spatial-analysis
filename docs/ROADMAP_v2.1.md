@@ -63,7 +63,7 @@ would quantify how much ambient contamination could move the conclusions.
 Score malignant programmes from v2 on TCGA-LUSC bulk RNA-seq (decoupler) and test association with survival and
 the TCGA molecular subtypes (classical / basal / secretory / primitive).
 
-## 6. Results dashboard (accepted for v2.1 on 2026-11-10) — 🔍 design under review
+## 6. Results dashboard (accepted for v2.1 on 2026-11-10) — 🚧 built and running locally (2026-11-11), not yet deployed
 
 **Goal.** Make the analysis *readable*. Anyone, with or without a programming background, should be able to see what is in
 the data, what each step did and **why**, and the evidence behind each decision. This is the interactive form of
@@ -123,12 +123,39 @@ pipeline steps ──► results/tables/*.csv, *.h5ad, *.zarr     (source of tru
 1. `export` step → DuckDB + schema test → 2. app skeleton (overview, provenance) → 3. stage pages in pipeline
 order → 4. HF Space + HF Dataset deploy → 5. README badge/link.
 
-### Open questions for review
-- Expression at cell level: pseudobulk only (small), or also cell-level expression for ~2k marker genes (larger, enables per-cell gene colouring on the UMAP)?
-- Should `decisions` be curated by hand from DEVELOPMENT_LOG, or should the log get a machine-readable block that `export` parses (single source of truth)?
+### Open questions → defaults taken while building (2026-11-11, open to revision)
+- **Expression at cell level:** both. Pseudobulk (mean log-expression and fraction expressing per gene × cell type ×
+  condition) for **all** genes and cells, so the dot plot covers any gene. Per-cell values only for a marker panel
+  (canonical markers + top-15 DE genes per contrast × group + top-500 HVGs ≈ 1.1k genes) on a 50k stratified
+  subsample, for UMAP colouring. Every cell type × condition stratum is represented. Size knobs live in
+  `config.yaml → dashboard`.
+- **`decisions` source:** curated by hand in `docs/dashboard_content.yaml`, with every entry citing its
+  DEVELOPMENT_LOG section. Parsing the log would need a machine-readable block in the log first. That is still the
+  better single-source design, deferred until the log's §3 settles after the §3.10 fixes.
+
+### As built (2026-11-11)
+| Piece | Where | Notes |
+|---|---|---|
+| `export` step | `src/lusc_atlas/export.py`, registered in `steps.py` (runs in the new pixi env `dashboard`) | 44 tables, **118 MB**, 42 s. Atomic write (`.partial` → `os.replace`). Records git SHA / dirty flag, config, summary.md and per-table row counts plus any reduction (`tables_info`). Per-sample LIANA shipped only at magnitude rank ≤ 0.01 (2.17 M → 248k rows) |
+| pixi env `dashboard` | `pixi.toml` (Python 3.12: streamlit, duckdb, plotly, anndata, h5py) | separate env, so the analysis lock is untouched (lock diff = insertions only). `app/requirements.txt` = app-only subset for HF Spaces |
+| App | `app/streamlit_app.py`, `app/views/*.py` (13 pages), `app/lib/` | overview, known issues, 9 stage pages, cell & gene explorer, provenance. Each stage page = question → "why" expander → known-issue banners → evidence charts → table view |
+| Tests | `tests/test_dashboard.py` | schema checks + every page renders through the real navigation (`streamlit.testing`). Skipped when streamlit or the DB is absent, so default-env CI is unchanged |
+| Colour | `app/lib/ui.py` | validated categorical palette in fixed order. Condition and atlas colours are constant across pages. 27 cell types are shown by compartment colour or highlight-one-grey-the-rest, never 27 hues |
+
+Run locally: `pixi run -e dashboard export` (or `run_all.py --only export`), then `pixi run -e dashboard app` → http://localhost:8501.
+
+### Remaining build steps
+1. Review pass on wording and figures (user).
+2. HF Dataset repo for the DuckDB file plus an HF Space for `app/` (`LUSC_DB_HF_REPO` env var is already supported in `app/lib/db.py`).
+3. CI job: dashboard env + `export` on smoke-test outputs + `tests/test_dashboard.py`.
+4. README badge/link.
+5. Rebuild the snapshot after the §3.10 fixes. The known-issue banners update from `docs/dashboard_content.yaml`.
 
 ## 7. v3 groundwork
-See DEVELOPMENT_LOG §4.
+See DEVELOPMENT_LOG §4. **2026-11-12: three v3 concepts prototyped — agentic "Ask the atlas" (A), NVIDIA Nemotron
+assessment (B), dashboard explainers + single-source-of-truth enforcement + hosting bundle (C) — index, verdicts
+and open questions in [docs/v3/README.md](v3/README.md).** Hosting note for item 6: Hugging Face now requires a
+paid plan for Docker Spaces; options compared in [docs/v3/C_dashboard_hosting.md](v3/C_dashboard_hosting.md).
 
 ---
 
@@ -137,3 +164,4 @@ See DEVELOPMENT_LOG §4.
 |---|---|
 | 2026-11-09 | Created; item 1 (histology CNN) deferred from v2.0 by decision |
 | 2026-11-10 | Item 6 widened from "results browser" to the results dashboard (DuckDB + Streamlit on HF Spaces); accepted for v2.1, design under review |
+| 2026-11-12 | §7 points to docs/v3 (concepts A–C); item 6 hosting re-evaluated (HF Docker Spaces need PRO; Streamlit Community Cloud as free fallback) |
