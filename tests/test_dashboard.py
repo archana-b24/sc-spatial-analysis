@@ -128,3 +128,16 @@ def test_db_checksum_pin(monkeypatch):
     at.run()
     assert not at.exception
     st.cache_resource.clear()
+
+
+def test_series_color_never_runs_out():
+    """Run 2 produced 9 CellCharter niches, one more than SERIES; categorical colours must not IndexError."""
+    import sys
+
+    sys.path.insert(0, str(APP))
+    from lib.ui import SERIES, series_color
+
+    cols = [series_color(i) for i in range(12)]
+    assert cols[: len(SERIES)] == SERIES
+    assert len(set(cols)) == 12
+    assert series_color(12) == series_color(0)

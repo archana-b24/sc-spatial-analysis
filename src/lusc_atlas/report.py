@@ -209,7 +209,36 @@ def build_report(cfg: dict) -> None:
     )
     comp = _read(cfg, "composition_sccoda.csv")
     if comp is not None:
-        sec += ["## 6. Composition (scCODA)", "", comp.round(3).to_markdown(index=False), ""]
+        ref = comp["reference"].iloc[0] if "reference" in comp else "automatic"
+        sec += [
+            "## 6. Composition (scCODA)",
+            "",
+            f"Reference cell type: `{ref}` (effects are relative to it).",
+            "",
+            comp.drop(columns=["reference"], errors="ignore").round(3).to_markdown(index=False),
+            "",
+        ]
+    milo = _read(cfg, "milo_nhoods.csv")
+    if milo is not None and "SpatialFDR" in milo:
+        fdr = cfg["abundance"].get("milo_spatial_fdr", 0.1)
+        sig = milo[milo["SpatialFDR"] < fdr]
+        head = (
+            f"Design `{milo['design'].iloc[0]}`, contrast `{milo['contrast'].iloc[0]}` "
+            f"({int(milo['n_samples'].iloc[0])} samples, {int(milo['n_donors'].iloc[0])} donors). "
+            if "design" in milo
+            else ""
+        )
+        sec += [
+            "### Milo (neighbourhood differential abundance)",
+            "",
+            head + f"{len(sig):,} of {len(milo):,} neighbourhoods with SpatialFDR < {fdr} "
+            f"({int((sig.logFC > 0).sum())} up, {int((sig.logFC < 0).sum())} down in the case condition).",
+            "",
+        ]
+        if len(sig) and "nhood_annotation" in sig:
+            by = pd.crosstab(sig["nhood_annotation"], sig["logFC"].gt(0).map({True: "up", False: "down"}))
+            by = by.loc[by.sum(axis=1).sort_values(ascending=False).index]
+            sec += [by.rename_axis("cell type").reset_index().to_markdown(index=False), ""]
     tr = _read(cfg, "trajectory_summary.csv")
     if tr is not None:
         sec += [

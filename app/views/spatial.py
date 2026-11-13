@@ -3,10 +3,21 @@ import io
 
 import plotly.graph_objects as go
 import streamlit as st
-from lib.db import q
+from lib.db import has_table, q
 from lib.explain import guide
 from lib.plots import heatmap
-from lib.ui import GREY, SERIES, caveats, decisions, footer, metric_row, page_header, show_table, style
+from lib.ui import (
+    GREY,
+    SERIES,
+    caveats,
+    decisions,
+    footer,
+    metric_row,
+    page_header,
+    series_color,
+    show_table,
+    style,
+)
 from PIL import Image
 
 page_header(
@@ -70,7 +81,7 @@ if what == "niche":
                 y=d.y,
                 mode="markers",
                 name=f"niche {n} ({len(d):,})",
-                marker=dict(size=size, color=SERIES[i], opacity=opacity),
+                marker=dict(size=size, color=series_color(i), opacity=opacity),
             )
         )
 else:
@@ -102,14 +113,23 @@ ni.index = [f"niche {i}" for i in ni.index]
 fig = go.Figure()
 top = ni.max().sort_values(ascending=False).index[:7]
 for i, ct in enumerate(top):
-    fig.add_trace(go.Bar(y=ni.index, x=ni[ct], name=ct, orientation="h", marker_color=SERIES[i]))
+    fig.add_trace(go.Bar(y=ni.index, x=ni[ct], name=ct, orientation="h", marker_color=series_color(i)))
 fig.add_trace(
     go.Bar(y=ni.index, x=ni.drop(columns=top).sum(axis=1), name="other", orientation="h", marker_color=GREY)
 )
 fig.update_layout(barmode="stack", xaxis=dict(title="mean fraction of spot", tickformat=".0%"))
 st.plotly_chart(style(fig, 300))
-st.caption("⚠️ The large *Rare epithelial* share is a deconvolution artefact (known issue 3), not biology.")
 show_table(ni.reset_index(names="niche"))
+if has_table("c2l_reference_labels"):
+    rl = q("SELECT label, n_cells, action, target FROM c2l_reference_labels ORDER BY n_cells DESC")
+    off = rl[rl.action != "kept"]
+    st.caption(
+        f"cell2location reference: {int((rl.action == 'kept').sum())} cell types with a signature. Not used: "
+        + ", ".join(f"*{r.label}* ({int(r.n_cells):,} cells, {r.action})" for r in off.itertuples())
+        + ". Tiny reference types give noisy signatures that soak up unexplained signal (in run 1 a 66-cell type "
+        "took 66 % of the tumour niche), and a mixed bucket has no coherent signature (DEVELOPMENT_LOG §3.11)."
+    )
+    show_table(rl, "Reference labels: kept, merged, dropped or excluded")
 
 c1, c2 = st.columns(2)
 with c1:

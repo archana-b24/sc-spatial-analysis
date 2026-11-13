@@ -491,7 +491,7 @@ class AtlasTools:
         res.note = (
             f"{tot} genes pass padj < {padj_max} ({direction}). log2FoldChange > 0 = higher in case group."
         )
-        if cell_type == "Unknown" or contrast == "malignant_vs_healthy_basal":
+        if cell_type == "Unknown":  # cells without a usable label (issue 2 explains what it holds)
             res.caveats = self._issues_for(ids=[2])
         return res
 
@@ -542,9 +542,11 @@ class AtlasTools:
         if df.empty:
             raise ToolError(f"no scCODA covariate for condition '{condition}'")
         res = self._result("composition_change", {"condition": condition}, df, sql)
+        ref = self._query("SELECT any_value(reference) AS r FROM composition_sccoda").r.iloc[0]
         res.note = (
             f"vs adjacent_normal. Credible = inclusion probability ≥ 0.8 ({int(df.credible.sum())} of "
-            f"{len(df)} types). Effects are relative to the automatically chosen reference type 'Unknown'."
+            f"{len(df)} types). Effects are relative to the reference cell type '{ref}' (fixed in config), "
+            "which is assumed not to change."
         )
         res.caveats = self._issues_for(ids=[1, 2])
         return res

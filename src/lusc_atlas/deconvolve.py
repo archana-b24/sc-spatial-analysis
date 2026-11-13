@@ -21,6 +21,48 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 
+def prepare_reference_labels(
+    labels: pd.Series,
+    min_cells: int = 0,
+    merge: dict[str, str] | None = None,
+    exclude: list[str] | tuple[str, ...] = (),
+) -> tuple[pd.Series, pd.DataFrame]:
+    """Decide which labels enter the cell2location reference (§3.10 #3).
+
+    Run 1 built a signature for every label, including `Rare epithelial` (66 healthy HLCA cells: ionocytes,
+    neuroendocrine, brush cells). A signature estimated from so few cells is noisy enough to soak up
+    unexplained epithelial signal in tumour spots: it took 66 % of the tumour niche. Rules, in order:
+
+    1. ``exclude`` labels are removed (e.g. ``Unknown``: a mixed bucket has no coherent signature);
+    2. a label with fewer than ``min_cells`` cells is merged into ``merge[label]`` if given, else dropped.
+
+    Counts are taken on the full reference, before the per-label subsample. Returns the new labels
+    (NaN = cell not used) and a decision table (label, n_cells, action, target).
+    """
+    merge = merge or {}
+    lab = labels.astype(str)
+    counts = lab.value_counts()
+    rows, mapping = [], {}
+    for label, n in counts.items():
+        if label in exclude:
+            action, target = "excluded", None
+        elif n < min_cells and label in merge:
+            action, target = "merged", merge[label]
+            if target not in counts.index:
+                raise ValueError(f"merge target {target!r} for {label!r} is not a reference label")
+        elif n < min_cells:
+            action, target = "dropped (< min_ref_cells)", None
+        else:
+            action, target = "kept", label
+        mapping[label] = target
+        rows.append({"label": label, "n_cells": int(n), "action": action, "target": target})
+    decisions = pd.DataFrame(rows).sort_values("n_cells", ascending=False, ignore_index=True)
+    for _, r in decisions[decisions.action != "kept"].iterrows():
+        log.info("c2l reference: %s (%d cells) → %s", r.label, r.n_cells, r.action)
+    new = lab.map(mapping)
+    return new.where(new.notna(), np.nan), decisions
+
+
 def reference_signatures(ref: ad.AnnData, c2l_cfg: dict, seed: int = 0) -> pd.DataFrame:
     import cell2location
     import scvi

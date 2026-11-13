@@ -40,7 +40,8 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2  # v2 (2026-11-12): + page_guide, glossary, step_stamps, schema_contract, meta provenance
+SCHEMA_VERSION = 3  # v3 (run 2, §3.11): + cells.de_group, c2l_reference_labels, milo design cols; niches open
+# v2 (2026-11-12): + page_guide, glossary, step_stamps, schema_contract, meta provenance
 
 # CSVs loaded 1:1 (table name = file stem). Anything not listed here is not shipped.
 TABLE_FILES = [
@@ -76,6 +77,8 @@ TABLE_FILES = [
     "ccc_tensor_sender_cells",
     "ccc_tensor_receiver_cells",
 ]
+# Shipped when present (added by the run-2 fixes, DEVELOPMENT_LOG §3.11); absent in older runs.
+OPTIONAL_TABLE_FILES = ["c2l_reference_labels"]
 
 # Tables and columns the app (app/) and the agent (src/lusc_atlas/agent/) depend on. Changing one of these is
 # a breaking change: bump SCHEMA_VERSION and update the consumers.
@@ -89,6 +92,7 @@ SCHEMA_CONTRACT: dict[str, list[str]] = {
         "donor_id",
         "condition",
         "harmonised_label",
+        "de_group",
         "compartment",
         "malignant",
         "cnv_score",
@@ -133,12 +137,19 @@ SCHEMA_CONTRACT: dict[str, list[str]] = {
         "n_control",
     ],
     "pathways_progeny": ["source", "score", "padj", "contrast", "group"],
-    "composition_sccoda": ["Covariate", "Cell Type", "log2-fold change", "Inclusion probability"],
-    "milo_nhoods": ["logFC", "SpatialFDR", "nhood_annotation"],
+    "composition_sccoda": [
+        "Covariate",
+        "Cell Type",
+        "log2-fold change",
+        "Inclusion probability",
+        "reference",
+    ],
+    "milo_nhoods": ["logFC", "SpatialFDR", "nhood_annotation", "design", "contrast", "n_samples", "n_donors"],
+    "c2l_reference_labels": ["label", "n_cells", "action", "target"],
     "trajectory_summary": ["lineage_state", "count", "50%"],
     "lineage_cells": ["lineage_state", "palantir_pseudotime", "umap_1", "umap_2"],
     "visium_spots": ["spot", "niche", "total_counts", "x_fullres", "y_fullres"],
-    "spatial_niches": ["niche", "Rare epithelial"],
+    "spatial_niches": ["niche"],  # + one column per cell2location reference label (set varies by run)
     "spatial_svg": ["gene", "I"],
     "ccc_differential": [
         "source",
@@ -348,7 +359,7 @@ def build_dashboard_db(cfg: dict, out: Path) -> None:
     db = _DB(tmp)
 
     # ---- 1. result tables, 1:1
-    for stem in TABLE_FILES:
+    for stem in TABLE_FILES + [f for f in OPTIONAL_TABLE_FILES if (tables / f"{f}.csv").exists()]:
         db.put(stem.replace("-", "_"), pd.read_csv(tables / f"{stem}.csv"), f"results/tables/{stem}.csv")
 
     # per-sample LIANA: keep the informative tail only (483 MB CSV → a few % of rows)
@@ -387,6 +398,7 @@ def build_dashboard_db(cfg: dict, out: Path) -> None:
         "assay",
         "condition",
         "harmonised_label",
+        "de_group",
         "compartment",
         "fine_label",
         "scanvi_prediction",

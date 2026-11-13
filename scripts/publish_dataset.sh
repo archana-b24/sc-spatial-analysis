@@ -13,7 +13,7 @@
 # Streamlit secrets TOML (repo, the upload's commit sha as revision, the file's sha256) to paste into
 # Community Cloud → Advanced settings → Secrets.
 #
-# Zero-cost guarantees (docs/v3/C_dashboard_hosting.md "Cost: $0"):
+# Zero-cost guarantees (DEVELOPMENT_LOG §3.11, docs/v3/C_dashboard_hosting.md "Cost: $0"):
 #   * it NEVER creates a Space (HF Docker/Gradio Spaces need a paid plan) and never sets hardware;
 #   * the dataset is always public (public storage is free; private storage has a quota);
 #   * it refuses files over MAX_MB (default 1024) so a mistake can't push a multi-GB object;

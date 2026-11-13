@@ -71,8 +71,13 @@ host and run, and a chatbot needs a paid LLM API key.)
 
 ```bash
 pixi run -e dashboard mcp                                                  # same tools as an MCP server
-pixi run -e dashboard cloud-dry-run                                       # free deploy rehearsal (clean clone + fresh venv)
+pixi run -e dashboard cloud-dry-run                                        # rehearse the free deploy locally
 ```
+
+Hosting is free-only: the app on **Streamlit Community Cloud** (deployed from this public repo, entrypoint
+`app/streamlit_app.py`, deps `app/requirements.txt`) and the DuckDB as a **public Hugging Face Dataset**
+(`scripts/publish_dataset.sh`, sha256-pinned at app start). Every service used, its free tier and what would
+trigger a cost: `docs/v3/C_dashboard_hosting.md` → *Cost: $0*.
 
 ## Data
 
@@ -90,27 +95,29 @@ tumour-vs-normal comparison alone. LuCA contributes 45 LUSC donors across studie
 healthy-lung reference. Merging them safely (deduplication, gene space, label crosswalk, nested batches,
 over-correction checks) is described in [DEVELOPMENT_LOG §3.3](DEVELOPMENT_LOG.md#33--merging-two-atlases--what-can-go-wrong-and-what-we-do-about-it).
 
-## Results (first complete run, 2026-11-10)
+## Results (run 2, 2026-11-13)
 
 Full auto-generated report: [`results/reports/summary.md`](results/reports/summary.md) (results are not
 committed; regenerate with `pixi run lusc-atlas report`). Interpretation and caveats:
-[DEVELOPMENT_LOG §3.4–3.10](DEVELOPMENT_LOG.md#34--qc--doublets--per-sample-both-conditions--resolves-s2-s6).
+[DEVELOPMENT_LOG §3.4–3.11](DEVELOPMENT_LOG.md#34--qc--doublets--per-sample-both-conditions--resolves-s2-s6).
 
 | Stage | Result |
 |---|---|
 | Cohort | 249,402 cells from 160 donors, 20 studies (HLCA: 119 healthy + 3 LUSC; LuCA: 38 LUSC; 15 LUSC donors have paired adjacent-normal tissue); 0 cross-atlas duplicate studies |
 | QC | 231,504 cells kept across 215 samples (per-sample MAD; 672 Scrublet ∧ SOLO doublets) |
 | Integration | 7 embeddings benchmarked with scib-metrics; **scANVI** chosen (total 0.677 vs sysVI 0.663, scVI 0.641, Harmony 0.637, unintegrated PCA 0.564; zero-shot Geneformer 0.385) |
-| Malignant cells | 3,942 CNV-called (chr3q score 9× healthy epithelium); 99.9 % agree with author labels, but conservative (13 % of author-labelled malignant cells) |
-| Pseudobulk DE | paired tumour vs adjacent-normal: 9,665 significant gene × cell-type results across 15 cell types, strongest in macrophages, neutrophils and T cells |
+| Malignant cells | 3,942 CNV-called (chr3q score 9× healthy epithelium); 99.9 % agree with author labels, but conservative (13 % of author-labelled malignant cells). The other 25,205 author-labelled tumour cells form `Tumour epithelial (CNV-low)`; vs healthy basal they show SOX2, TP63 and CDKN2A up |
+| Pseudobulk DE | paired tumour vs adjacent-normal: 8,474 significant gene × cell-type results across 15 cell types, strongest in macrophages, neutrophils and T cells |
+| Composition | scCODA (reference cDC): tumour has fewer NK, CD8 T, CD4 T, non-classical monocytes, AT1/AT2 and macrophages than adjacent tissue, and more CNV-low tumour epithelium. Milo (paired, 14 donors): 1,671 of 6,225 neighbourhoods shift, with T-cell states moving in both directions |
 | Trajectory | Palantir/CellRank 2: Malignant cells sit further from healthy basal cells (median pseudotime 0.67 vs 0.55) |
-| Spatial | 6,191 Visium spots deconvolved into 27 cell types; 3 CellCharter niches (tumour-epithelial, immune–stromal, fibro-muscular) |
-| Cell–cell communication | Tumour-enriched neutrophil VEGFA/PLAU signalling and the TIGIT–NECTIN2 checkpoint axis; Tensor-cell2cell rank 5; spatial ECM → CD44/LRP1 co-expression |
+| Spatial | 6,191 Visium spots deconvolved into 25 cell types; 9 CellCharter niches (5 tumour-epithelial, 3 stromal–myeloid, 1 fibro-muscular); tumour niches are 40–62 % CNV-low tumour epithelium + 12–14 % Malignant |
+| Cell–cell communication | Tumour-enriched neutrophil VEGFA/PLAU signalling and the TIGIT–NECTIN2 checkpoint axis; Tensor-cell2cell rank 6 (sample-level programmes, not tumour-specific); spatial ECM → CD44/LRP1 co-expression |
 
-**Known issues** being fixed before `v2.0.0` is tagged ([§3.10](DEVELOPMENT_LOG.md#310--post-run-review--open-issues-2026-11-11)):
-Milo tested the wrong contrast. ~25k CNV-low author-labelled tumour cells sit in the `Unknown` label, which
-affects scCODA and the `Unknown` rows of DE/CCC. A 66-cell rare-epithelial reference absorbs tumour signal in
-cell2location.
+**Known issues** ([§3.10](DEVELOPMENT_LOG.md#310--post-run-review--open-issues-2026-11-11)): run 1's three
+high-severity issues (Milo contrast, tumour cells hidden in `Unknown`, a 66-cell rare-epithelial cell2location
+reference) are fixed in run 2; before/after in [DEVELOPMENT_LOG §3.11](DEVELOPMENT_LOG.md) and
+[docs/v3/FIXES_RUN2.md](docs/v3/FIXES_RUN2.md). Still open and documented: tensor factors don't separate tumour
+from adjacent tissue, SOLO and Scrublet disagree, and cross-atlas mixing is below random within cell types.
 
 ## Repository layout
 

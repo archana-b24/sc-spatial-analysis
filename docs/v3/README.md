@@ -18,6 +18,15 @@ your review. Nothing was deployed, uploaded or pushed. The §3.10 pipeline issue
 > Claude Skill (concept 4) work through Claude Code with no extra cost. Mentions of *Ask the atlas* below
 > describe the prototype as built, not the current site.
 
+> **Update 2026-11-12 (fixes session, [FIXES_RUN2.md](FIXES_RUN2.md)): the paid deploy path is gone.** The HF
+> Docker-Space bundle (`build_space.py`, `deploy_space.sh`, `space_dry_run.sh`, tasks `space-build` /
+> `space-dry-run`) is parked outside the repo (`../.tooling/parked_paid_deploy_2026-11-12/`). The free-only
+> replacements are `scripts/publish_dataset.sh` (`pixi run -e dashboard publish-dataset`: DuckDB → public HF
+> Dataset, never a Space) and `scripts/cloud_dry_run.sh` (`pixi run -e dashboard cloud-dry-run`: clean clone, fresh
+> Python 3.12 venv from `app/requirements.txt`, secrets TOML, DB fetched through `hf_hub_download`, every page
+> rendered, wrong-sha negative control). See [C §3 and "Cost: $0"](C_dashboard_hosting.md#cost-0). Mentions of the
+> Space bundle below describe what this session originally built. Open question 2 is answered: Community Cloud.
+
 ## Executive summary
 
 **A: agentic application.** I surveyed ~25 agent systems (CellAgent, CellVoyager, SpatialAgent, scChat, Biomni,
@@ -54,8 +63,8 @@ reconciled: h5ad/zarr/CSV are the *computational* source of truth, and DuckDB is
 truth. The new **Start here** page shows the workflow map and one computed headline per stage. Every stage page now
 has a four-part **reader guide** (what / how to read / what it means / caveats) whose interpretations are computed
 from the DB at render time and name the §3.10 problems where they apply. There is also a **glossary**. Public
-access: *(revised after the zero-cost decision)* `publish_dataset.sh` (public HF Dataset, needs `HF_TOKEN`) and a
-local Community Cloud rehearsal `cloud_dry_run.sh`; the Docker Space bundle was removed. Verified
+access: the Space bundle builder, a one-command `deploy_space.sh` (needs only `HF_TOKEN`, not run) and a local
+**dry deploy** (clean venv, all 16 pages render from the bundle, health check OK, 433 MB peak) are ready. Verified
 today: HF deprecated the Streamlit SDK (2025-04-30) and **creating Docker Spaces needs HF PRO**. So the recommendation
 is the DuckDB as a free HF Dataset (sha256-pinned), plus the app on an HF Docker Space if you have PRO, otherwise on
 Streamlit Community Cloud. The pending **151 vs 160 donors** question is resolved: 160 is the pre-QC cohort, and
@@ -64,16 +73,20 @@ QC dropped 26 samples under 200 cells, removing 9 donors, so 151 is post-QC. The
 ## Open questions for you
 
 1. **What was the 4th concept?** Your message said "4 concepts" but listed three; I did those three.
-2. **Hosting:** do you have, or want, **HF PRO** (needed for a Docker Space; current price at https://huggingface.co/pricing, not verified here)?
+2. ~~**Hosting:** do you have, or want, **HF PRO** (needed for a Docker Space; current price at https://huggingface.co/pricing, not verified here)?
    If not, I recommend Streamlit Community Cloud + HF Dataset (free); steps are in C §3.4. This revises the
-   2026-11-10 "HF Spaces" decision only in *where the app runs*; the data plan is unchanged.
-3. **LLM keys and spend:** may I run the eval once with your `ANTHROPIC_API_KEY` (≈ $2–3 on Opus 5.5) and an
+   2026-11-10 "HF Spaces" decision only in *where the app runs*; the data plan is unchanged.~~
+   **Answered 2026-11-12: free only → Community Cloud + public HF Dataset; no HF PRO.**
+3. ~~**LLM keys and spend:** may I run the eval once with your `ANTHROPIC_API_KEY` (≈ $2–3 on Opus 5.5) and an
    `NVIDIA_API_KEY` (free trial) to get the first real numbers? And for the public site, should *Ask the atlas* use
    **your** key (capped at 10 questions per browser session), **visitors' own keys only** (current default when no
-   secret is set), or be hidden?
+   secret is set), or be hidden?~~
+   **Superseded 2026-11-12: everything stays free; the chatbot page is removed and no LLM API is called.** The
+   eval stays unrun; it would only be run with a free option (e.g. a local open-weights model).
 4. **Licence:** the repo has no LICENSE file, so the Space card asserts none. Which licence do you want for code and
    for the published DuckDB snapshot (whose content derives from CELLxGENE/10x data)?
-5. **Default model:** I used `claude-opus-5-5` (current default Opus). Prefer Sonnet 5.5 for cost on the public site?
+5. ~~**Default model:** I used `claude-opus-5-5` (current default Opus). Prefer Sonnet 5.5 for cost on the public site?~~
+   **Moot: no hosted model is used.**
 6. **Agent phase 2** (propose pipeline re-runs with a config diff + your approval): in scope for v3, or keep v3 to
    interpretation?
 7. **Commit plan:** split into (a) the v2.1 dashboard (already pending) and (b) v3 concepts, or one commit? Nothing
@@ -93,7 +106,7 @@ QC dropped 26 samples under 200 cells, removing 9 donors, so 151 is post-QC. The
 | `tests/test_agent.py` | 24 tests: guards, loop with fake LLM, mocked Anthropic/OpenAI adapters, reasoning flags, eval integrity, MCP |
 | `tests/agent_eval/questions.yaml` | 24-question eval with `truth_sql` |
 | `scripts/run_agent_eval.py` | Eval runner (`--check` without LLM; `--providers anthropic,nvidia`) |
-| `scripts/publish_dataset.sh`, `scripts/cloud_dry_run.sh` | Free deploy: public HF Dataset upload (you run it); local Community Cloud rehearsal (replaced the removed Docker Space scripts) |
+| `scripts/build_space.py`, `scripts/deploy_space.sh`, `scripts/space_dry_run.sh` | Space bundle, one-command deploy (not run), local dry deploy |
 | `docs/v3/README.md`, `A_agentic_research.md`, `B_nemotron_assessment.md`, `C_dashboard_hosting.md`, `dataset_card.md` | This documentation + the HF Dataset card |
 
 **Changed**
@@ -127,9 +140,12 @@ cd sc-spatial-analysis && source ../storage_env.sh
 pixi run -e dashboard app                          # http://localhost:8501 → "Start here" (running now in tmux lusc-v2:app)
 pixi run -e dashboard pytest -q tests/test_agent.py tests/test_dashboard.py   # 45 tests
 pixi run -e dashboard agent-eval --check           # eval set + grader self-test, no LLM
+export ANTHROPIC_API_KEY=…                          # then:
+pixi run -e dashboard ask "How conservative is the malignant-cell call?"
+pixi run -e dashboard agent-eval --providers anthropic,nvidia   # needs both keys; ≈ $2–3 on Opus 5.5
 pixi run -e dashboard mcp                          # MCP stdio server (Claude Desktop / Claude Code setup in mcp_server.py)
-pixi run -e dashboard cloud-dry-run                # free deploy rehearsal (Community Cloud) on :8502
-HF_TOKEN=… pixi run -e dashboard publish-dataset   # publish the DB as a public HF Dataset (asks first)
+pixi run -e dashboard cloud-dry-run                # rehearse the free Community Cloud deploy locally (no upload)
+HF_TOKEN=… scripts/publish_dataset.sh              # YOU run it: DuckDB → public HF Dataset (asks first; never a Space)
 ```
 
 ## Checks run at the end of the session
@@ -137,13 +153,13 @@ HF_TOKEN=… pixi run -e dashboard publish-dataset   # publish the DB as a publi
 * `pixi run test` (default env, as CI runs it): **15 passed, 2 skipped** (dashboard/agent tests skip there).
 * `pixi run -e dashboard pytest tests/test_dashboard.py tests/test_agent.py`: **45 passed**.
 * `agent-eval --check`: 24/24 truth queries run; grader self-test 0 failures.
-* `space_dry_run.sh` (since removed): 16/16 pages render from the bundle in a clean venv; health OK; peak RSS 433 MB.
+* `space_dry_run.sh`: 16/16 pages render from the bundle in a clean venv; health OK; peak RSS 433 MB.
 * Live app restarted on the new version in `lusc-v2:app`; `curl localhost:8501/_stcore/health` → `ok`.
 
 ## Recommended next steps
 1. Answer the open questions (4th concept, hosting plan, keys).
 2. Run `agent-eval` once with keys; record the table in A §6 and B §5 (replacing the token estimates).
 3. Review the wording on *Start here* and the reader guides in the running app; commit (your call on the split).
-4. Deploy (Dataset first; then Space or Community Cloud).
+4. Deploy (Dataset first with `publish_dataset.sh`, then the app on Streamlit Community Cloud; C §3.4).
 5. Then return to the §3.10 fixes. Afterwards `export` → the computed interpretations and the eval truths update
    automatically, and the eval doubles as a regression check that the fixes changed what they should.

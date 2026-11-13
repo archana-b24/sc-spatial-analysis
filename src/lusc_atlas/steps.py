@@ -291,7 +291,14 @@ def cnv(cfg: dict) -> None:
     )
     annotate_positions(adata, pos)
     summary = run_infercnv(adata, cfg["cnv"], n_jobs=cfg["project"]["n_jobs"], seed=cfg["project"]["seed"])
-    make_de_groups(adata, cfg["integration"]["harmonised_label_key"])
+    ccfg = cfg["cnv"]
+    make_de_groups(
+        adata,
+        cfg["integration"]["harmonised_label_key"],
+        cnv_low_label=ccfg.get("cnv_low_label"),
+        author_label=ccfg["author_label_check"],
+        tumour_conditions=ccfg["tumour_conditions"],
+    )
     _write_table(summary, _p(cfg, OUTPUTS["cnv"][1]))
     _write_table(
         author_label_concordance(adata, cfg["cnv"]["author_label_check"]),
@@ -307,7 +314,7 @@ def cnv(cfg: dict) -> None:
 def de(cfg: dict) -> None:
     import anndata as ad
 
-    from .de import malignant_vs_healthy_basal, pathway_activities, pseudobulk, run_contrast
+    from .de import pathway_activities, pseudobulk, run_contrast, tumour_epithelium_vs_healthy_basal
 
     adata = ad.read_h5ad(_p(cfg, INPUTS["de"][0]))
     pdata = pseudobulk(adata, cfg["de"])
@@ -315,7 +322,13 @@ def de(cfg: dict) -> None:
     res = [
         run_contrast(pdata, cfg["de"], name, spec, n_jobs=nj) for name, spec in cfg["de"]["contrasts"].items()
     ]
-    res.append(malignant_vs_healthy_basal(pdata, cfg["de"], cfg["trajectory"]["root_label"], n_jobs=nj))
+    vs_basal = cfg["de"].get("vs_healthy_basal", {"malignant_vs_healthy_basal": "Malignant"})
+    for name, grp in vs_basal.items():
+        res.append(
+            tumour_epithelium_vs_healthy_basal(
+                pdata, cfg["de"], grp, cfg["trajectory"]["root_label"], name, n_jobs=nj
+            )
+        )
     allres = pd.concat([r for r in res if not r.empty], ignore_index=True)
     _write_table(allres, _p(cfg, OUTPUTS["de"][0]))
     for name, tab in pathway_activities(allres, cfg["de"]["pathways"]).items():
@@ -330,13 +343,13 @@ def abundance(cfg: dict) -> None:
     adata = ad.read_h5ad(_p(cfg, INPUTS["abundance"][0]))
     seed = cfg["project"]["seed"]
     # composition per sample (tumour and adjacent-normal of one donor are separate samples)
-    eff = composition_sccoda(adata, "de_group", "sample", "condition", seed)
+    eff = composition_sccoda(
+        adata, "de_group", "sample", "condition", seed, reference=cfg["abundance"]["sccoda_reference"]
+    )
     _write_table(eff, _p(cfg, OUTPUTS["abundance"][0]))
-    try:
-        milo = milo_da(adata, cfg["abundance"], "sample", "condition", seed)
-        _write_table(milo, resolve(cfg, "tables", "milo_nhoods.csv"))
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Milo failed (%s); scCODA result still written", exc)
+    # Milo failure fails the step (run 1 swallowed errors with a warning; same policy as ccc, §3.9)
+    milo = milo_da(adata, cfg["abundance"], "sample", "condition", seed)
+    _write_table(milo, resolve(cfg, "tables", "milo_nhoods.csv"))
 
 
 def trajectory(cfg: dict) -> None:
@@ -369,12 +382,23 @@ def spatial_prep(cfg: dict) -> None:
 def deconvolve(cfg: dict) -> None:
     import anndata as ad
 
-    from .deconvolve import map_spots, reference_signatures
+    from .deconvolve import map_spots, prepare_reference_labels, reference_signatures
 
     seed = cfg["project"]["seed"]
+    c2l_cfg = cfg["spatial"]["c2l"]
     ref = ad.read_h5ad(_p(cfg, INPUTS["deconvolve"][0]))
     vis = ad.read_h5ad(_p(cfg, INPUTS["deconvolve"][1]))
-    sig = reference_signatures(ref, cfg["spatial"]["c2l"], seed)
+    # §3.10 #3: drop / merge tiny and mixed reference labels before building signatures
+    labels, decisions = prepare_reference_labels(
+        ref.obs[c2l_cfg["reference_label"]],
+        min_cells=c2l_cfg.get("min_ref_cells", 0),
+        merge=c2l_cfg.get("merge_small_labels") or {},
+        exclude=c2l_cfg.get("exclude_labels") or [],
+    )
+    _write_table(decisions, resolve(cfg, "tables", "c2l_reference_labels.csv"))
+    ref = ref[labels.notna().values].copy()
+    ref.obs["c2l_label"] = pd.Categorical(labels.dropna().astype(str).values)
+    sig = reference_signatures(ref, {**c2l_cfg, "reference_label": "c2l_label"}, seed)
     sig.rename_axis("gene").reset_index().to_csv(
         resolve(cfg, "tables", "c2l_reference_signatures.csv"), index=False
     )
@@ -447,6 +471,9 @@ def ccc(cfg: dict) -> None:
 def report(cfg: dict) -> None:
     from .report import build_report
 
+    # §3.10 #7: the report embeds every step's provenance, its own included → write a preliminary record
+    # first so the table is not one run stale (run_step overwrites it with the final runtime afterwards).
+    _provenance(cfg, "report", time.time(), {"note": "preliminary record; runtime filled in after the step"})
     build_report(cfg)
 
 

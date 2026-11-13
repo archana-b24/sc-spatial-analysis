@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from .db import q
+from .db import has_table, q
 
 SEV = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 
@@ -91,6 +91,15 @@ def _malignant() -> list[str]:
         f"Only **{int(d.k)} of {int(d.n)}** tumour donors have ≥ 10 malignant cells, so malignant-cell "
         "results rest on few patients."
     )
+    low = _one("""SELECT count(*) FILTER (WHERE de_group = 'Tumour epithelial (CNV-low)') n,
+                         count(DISTINCT donor_id) FILTER (WHERE de_group = 'Tumour epithelial (CNV-low)') d
+                  FROM cells""")
+    if int(low.n):
+        out.append(
+            f"The **{int(low.n):,}** author-labelled tumour cells that miss the CNV threshold form their own group, "
+            f"*Tumour epithelial (CNV-low)* ({int(low.d)} donors), instead of hiding in `Unknown`. `Malignant` "
+            "keeps its strict CNV definition."
+        )
     return out
 
 
@@ -106,11 +115,18 @@ def _de() -> list[str]:
             f"In the paired comparison, **{p.group.nunique()}** cell types were testable. The most changed is "
             f"`{top.group}` ({int(top.n):,} significant genes)"
             + (
-                f" — but `Unknown` mixes un-called tumour cells with unmapped cells; the most changed named type "
-                f"is **{nxt.group}** ({int(nxt.n):,} genes)."
+                f" — `Unknown` now holds only cells without a usable label, so read it as a mixed group; the "
+                f"most changed named type is **{nxt.group}** ({int(nxt.n):,} genes)."
                 if top.group == "Unknown"
                 else "."
             )
+        )
+    vb = s[s.contrast.str.endswith("_vs_healthy_basal")]
+    if not vb.empty:
+        out.append(
+            "Tumour epithelium vs healthy basal cells (unpaired): "
+            + "; ".join(f"{r.group} **{int(r.n):,}** genes" for r in vb.itertuples())
+            + "."
         )
     g = q("""SELECT gene, log2FoldChange, padj FROM de_pseudobulk WHERE contrast = 'paired_tumour_vs_adjacent'
              AND "group" = 'Macrophage' AND padj < 0.05 AND log2FoldChange > 0 ORDER BY padj LIMIT 3""")
@@ -145,16 +161,27 @@ def _composition() -> list[str]:
             out.append(
                 "Credibly **higher**: " + ", ".join(f"{r.ct} ({r.lfc:+.2f})" for r in up.itertuples()) + "."
             )
+        ref = q("SELECT any_value(reference) r FROM composition_sccoda").r.iloc[0]
         out.append(
-            "These are log2 changes *relative to the reference type `Unknown`*; if `Unknown` itself grows "
-            "in tumours (it holds un-called tumour cells), every other type looks lower. Read directions "
-            "with care until known issue 2 is fixed."
+            f"These are log2 changes *relative to the reference type `{ref}`*, which is assumed not to change. "
+            "scCODA can only say how types move against each other, never absolute cell numbers."
         )
-    mi = _one("SELECT count(*) n, count(*) FILTER (WHERE SpatialFDR < 0.1) s FROM milo_nhoods")
-    out.append(
-        f"Milo: {int(mi.s)} of {int(mi.n):,} neighbourhoods significant, but it tested the wrong contrast "
-        "(known issue 1), so this is not a null result."
+    mi = _one("""SELECT count(*) n, count(*) FILTER (WHERE SpatialFDR < 0.1) s,
+                        count(*) FILTER (WHERE SpatialFDR < 0.1 AND logFC > 0) up, any_value(n_donors) d
+                 FROM milo_nhoods""")
+    up = q("""SELECT nhood_annotation a, count(*) k FROM milo_nhoods WHERE SpatialFDR < 0.1 AND logFC > 0
+              GROUP BY 1 ORDER BY 2 DESC LIMIT 3""")
+    dn = q("""SELECT nhood_annotation a, count(*) k FROM milo_nhoods WHERE SpatialFDR < 0.1 AND logFC < 0
+              GROUP BY 1 ORDER BY 2 DESC LIMIT 3""")
+    line = (
+        f"Milo (paired, {int(mi.d)} patients): **{int(mi.s):,}** of {int(mi.n):,} neighbourhoods change "
+        f"({int(mi.up):,} up, {int(mi.s - mi.up):,} down in tumour)."
     )
+    if len(up):
+        line += " Most up: " + ", ".join(f"{r.a} ({int(r.k)})" for r in up.itertuples()) + "."
+    if len(dn):
+        line += " Most down: " + ", ".join(f"{r.a} ({int(r.k)})" for r in dn.itertuples()) + "."
+    out.append(line)
     return out
 
 
@@ -173,16 +200,29 @@ def _trajectory() -> list[str]:
 
 def _spatial() -> list[str]:
     s = _one("SELECT count(*) n, count(DISTINCT niche) k FROM visium_spots")
-    re_ = q('SELECT niche, "Rare epithelial" r FROM spatial_niches ORDER BY r DESC').iloc[0]
+    ni = q("SELECT * FROM spatial_niches").set_index("niche")
     svg = q("SELECT gene, I FROM spatial_svg ORDER BY I DESC LIMIT 3")
-    return [
-        f"**{int(s.n):,}** spots group into **{int(s.k)}** niches.",
-        f"Niche {int(re_.niche)} is **{re_.r:.0%}** 'Rare epithelial' by deconvolution — an artefact of a tiny "
-        "reference type absorbing the tumour signal (known issue 3), not biology.",
+    comp = "; ".join(
+        f"niche {int(n)}: "
+        + ", ".join(f"{ct} {v:.0%}" for ct, v in row.sort_values(ascending=False).head(2).items())
+        for n, row in ni.iterrows()
+    )
+    out = [
+        f"**{int(s.n):,}** spots group into **{int(s.k)}** niches. Top two cell types per niche "
+        f"(mean share of spot): {comp}.",
         "Most spatially clustered genes: "
         + ", ".join(f"*{r.gene}* (I = {r.I:.2f})" for r in svg.itertuples())
         + ".",
     ]
+    if has_table("c2l_reference_labels"):
+        off = q("SELECT label FROM c2l_reference_labels WHERE action <> 'kept'").label.tolist()
+        if off:
+            out.append(
+                "Left out of the deconvolution reference (too few cells or a mixed bucket): "
+                + ", ".join(off)
+                + ". One section only, so this is descriptive."
+            )
+    return out
 
 
 def _ccc() -> list[str]:

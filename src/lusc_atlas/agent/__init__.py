@@ -13,7 +13,8 @@ Layout (design and rationale: docs/v3/A_agentic_research.md):
 
 Why it lives in ``src/lusc_atlas`` rather than ``app/``: four consumers (Streamlit page, MCP server, eval
 runner, CLI) import it, and it depends only on duckdb/pandas (+ optional provider SDKs), never on the
-analysis stack.
+analysis stack. (The Space bundle that vendored it, scripts/build_space.py, was parked on 2026-11-12 under
+the zero-cost rule.)
 """
 
 from .loop import AgentResult, ask

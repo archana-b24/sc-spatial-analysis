@@ -100,6 +100,27 @@ sc-spatial-analysis/
 | `ccc` | default | LIANA+ by sample, differential, Tensor-cell2cell, spatial bivariate |
 | `report` | default | figures + `results/reports/summary.md` from outputs only |
 
+### 1.3 ✅ Dashboard hosting: free services only (decided 2026-11-12)
+- **Decision (user):** "I have to keep everything free … I don't get sucked into a paid plan." Nothing in the repo
+  may create, require or nudge towards a paid plan or paid API.
+- **What changed:** the Hugging Face **Docker Space** path (`build_space.py`, `deploy_space.sh`,
+  `space_dry_run.sh`, tasks `space-build`/`space-dry-run`) was removed, because creating a Docker or Gradio Space
+  now needs HF PRO. The scripts are parked outside the repo (`../.tooling/parked_paid_deploy_2026-11-12/`).
+  Hosting = **Streamlit Community Cloud** (free; deployed by the user from the public GitHub repo, entrypoint
+  `app/streamlit_app.py`, deps `app/requirements.txt`, Python 3.12) + the DuckDB as a **public HF Dataset**
+  (free), downloaded at start-up through `hf_hub_download`, pinned to the upload's commit and verified by sha256.
+  `app/lib/db.py` reads the `LUSC_DB_*` settings from env **or** `st.secrets` (Community Cloud's Secrets box).
+  `.streamlit/config.toml` moved to the repo root (Community Cloud's working directory).
+- **New scripts:** `scripts/publish_dataset.sh` (user runs it with `HF_TOKEN`: public Dataset only, refuses private
+  repos and files > 1 GB, never creates a Space, prints the secrets TOML) and `scripts/cloud_dry_run.sh` (clean
+  clone of exactly what git would push → fresh Python 3.12 venv from `app/requirements.txt` → secrets TOML → DB via
+  `hf_hub_download` from a seeded offline cache → every page rendered → wrong-sha negative control → health check).
+- **Options considered:** HF Docker Space (paid, rejected), MotherDuck (free tier exists but adds an account and a
+  network DB for a 119 MB read-only file; rejected), bundling the DB in git (119 MB derived binary in history;
+  rejected), Community Cloud + HF Dataset (**chosen**).
+- **Evidence:** rehearsal passes, peak RSS 444 MB vs Community Cloud's 690 MB–2.7 GB allocation (docs, Feb 2024
+  figures). Every service, its free tier and what would trigger a cost: `docs/v3/C_dashboard_hosting.md` → *Cost: $0*.
+
 ---
 
 ## 2. Reproducibility
@@ -273,11 +294,11 @@ v1: cell-level Wilcoxon + phenotype-permutation GSEA with cells as samples (pseu
 | `tumour_vs_healthy` (sensitivity, confounded by design) | `~ study + assay + condition` | 20 | 20,174 |
 | `malignant_vs_healthy_basal` | unpaired | 1 | 300 |
 
-In the paired contrast the strongest signal is in myeloid and lymphoid cells: Macrophage 2,038 genes (14 donor pairs), Neutrophil 1,652 (5), CD4 T 924 (11), Monocyte classical 753 (12), CD8 T 706 (12). No epithelial group is tested at all, because none has ≥ 10 cells in ≥ 3 samples per condition (`min_cells_per_pseudobulk`, `min_samples_per_condition`). This matches the earlier power note that adjacent-normal tissue holds few epithelial cells. The epithelial question is answered by `malignant_vs_healthy_basal` instead. ⚠️ `Unknown` (2,181 paired genes) is a mixed bucket and should not be interpreted (§3.10 item 2).
+In the paired contrast the strongest signal is in myeloid and lymphoid cells: Macrophage 2,038 genes (14 donor pairs), Neutrophil 1,652 (5), CD4 T 924 (11), Monocyte classical 753 (12), CD8 T 706 (12). No epithelial group is tested at all, because none has ≥ 10 cells in ≥ 3 samples per condition (`min_cells_per_pseudobulk`, `min_samples_per_condition`). This matches the earlier power note that adjacent-normal tissue holds few epithelial cells. The epithelial question is answered by `malignant_vs_healthy_basal` instead. ⚠️ `Unknown` (2,181 paired genes) is a mixed bucket and should not be interpreted (§3.10 item 2). *(Run 1.)* **Run 2 (§3.11):** paired 8,474 rows; only `Unknown` changes (2,181 → 990, now mostly unannotated HLCA cells), every other group is identical; `tumour_vs_healthy` 19,452; new `cnvlow_tumour_vs_healthy_basal` 1,040.
 
-**scCODA** (reference cell type chosen automatically = `Unknown`; credible = inclusion probability ≥ 0.8): relative to adjacent-normal, tumour samples have lower CD4 T, CD8 T, NK, Macrophage, Monocyte non-classical, AT1 and AT2 proportions, and no credible change in Malignant. Healthy donors have fewer CD4 T / CD8 T / NK / B / classical monocytes and more Multiciliated cells than adjacent-normal tissue. ⚠️ With `Unknown` (mostly un-called tumour cells) as the reference, these are shifts *relative to the tumour-cell bucket*. That explains why nearly everything goes down in tumour, so the direction must be read with care (§3.10 item 2).
+**scCODA** (reference cell type chosen automatically = `Unknown`; credible = inclusion probability ≥ 0.8): relative to adjacent-normal, tumour samples have lower CD4 T, CD8 T, NK, Macrophage, Monocyte non-classical, AT1 and AT2 proportions, and no credible change in Malignant. Healthy donors have fewer CD4 T / CD8 T / NK / B / classical monocytes and more Multiciliated cells than adjacent-normal tissue. ⚠️ With `Unknown` (mostly un-called tumour cells) as the reference, these are shifts *relative to the tumour-cell bucket*. That explains why nearly everything goes down in tumour, so the direction must be read with care (§3.10 item 2). *(Run 1.)* **Run 2 (reference fixed to cDC, §3.11):** tumour vs adjacent, credible: NK −1.15, CD8 T −0.80, CD4 T −0.66, Monocyte non-classical −0.43, AT2 −0.37, Macrophage −0.33, AT1 −0.29, EC lymphatic −0.12 (log2 fold change), and `Tumour epithelial (CNV-low)` +2.23. The run-1 directions hold with a stable reference, so they were not an artefact of the `Unknown` reference; the effect sizes are slightly larger.
 
-**Milo:** 17,511 neighbourhoods, **0 significant** (SpatialFDR < 0.1). ⚠️ This is a bug, not a null result: the wrong contrast was tested (§3.10 item 1).
+**Milo:** 17,511 neighbourhoods, **0 significant** (SpatialFDR < 0.1). ⚠️ This is a bug, not a null result: the wrong contrast was tested (§3.10 item 1). *(Run 1.)* **Run 2 (paired, `~donor_id + condition`, 14 donors / 48 samples):** **1,671 of 6,225** neighbourhoods significant (917 enriched in tumour, 754 depleted). By annotation: CD4 T 280 up / 59 down, B 261 / 0, CD8 T 155 / 154, Macrophage 56 / 221, Monocyte classical 45 / 102, NK 26 / 112, CNV-low tumour epithelium 18 / 0. Milo finds what scCODA cannot: *states* within a type move in opposite directions (CD8 T, CD4 T), while NK, macrophages and classical monocytes are mostly depleted, consistent with scCODA.
 
 ### 3.7 ✅ Trajectory — *resolves S8*
 v1: PAGA graphs, stub notebook. v2: Palantir pseudotime rooted in healthy basal cells + CellRank 2 (CytoTRACE + pseudotime kernels). Reported as transcriptional distance from normal basal (malignant cells are patient-clonal; not lineage tracing).
@@ -289,7 +310,9 @@ v1: Scanorama + cosine label transfer (one label per multi-cell spot). v2: cell2
 
 **Result:** 6,195 → **6,191 spots** kept (18,061 genes; median 66k UMIs, 10k genes per spot). cell2location ran for 10.6 h on CPU and estimated abundances for **27 harmonised cell types** per spot. CellCharter found **3 niches**: an epithelial/tumour niche (0), a mixed immune–stromal niche (1) and a fibroblast + smooth-muscle niche (2: Fibroblast 22 %, SMC/pericyte 41 %). Spatial bivariate LR is dominated by ECM → CD44/LRP1 pairs (FN1, collagens, CCN1/2, SERPING1; Moran's R 0.74–0.84). Moran's I is significant for 1,998 of the 2,000 genes tested, which is typical for Visium; genes are ranked by I rather than filtered by p.
 
-⚠️ **Rare epithelial** (only 66 healthy HLCA cells: ionocytes, neuroendocrine, brush cells) gets 66 % of niche 0 and 41 % of niche 1, while Malignant gets 11 % and 5 %. This is almost certainly a deconvolution artefact, not biology (§3.10 item 3), so per-type spatial abundances should not be quoted until it is fixed.
+⚠️ **Rare epithelial** (only 66 healthy HLCA cells: ionocytes, neuroendocrine, brush cells) gets 66 % of niche 0 and 41 % of niche 1, while Malignant gets 11 % and 5 %. This is almost certainly a deconvolution artefact, not biology (§3.10 item 3), so per-type spatial abundances should not be quoted until it is fixed. *(Run 1.)*
+
+✅ **Run 2 (2026-11-12/13, §3.11):** reference labels with < 200 cells are dropped (Rare epithelial 66, Mesothelial 91) and `Unknown` (28,224) is excluded, so the reference has **25 signatures**, including `Tumour epithelial (CNV-low)` (decisions in `results/tables/c2l_reference_labels.csv`). cell2location took 11.2 h. CellCharter's stability-based auto-K now picks **9 niches** (3 in run 1): five epithelial/tumour niches (0, 2, 3, 6, 8: CNV-low tumour epithelium 40–62 % + Malignant 12–14 %, with Multiciliated 11–14 % and Plasma 6–9 %), a smooth-muscle/fibroblast niche (7: SMC/pericyte 42 %, Fibroblast 24 %, like run 1's niche 2), and three mixed stromal–myeloid niches (1, 4, 5: Fibroblast, Neutrophil, classical Monocyte). Rare epithelial no longer absorbs the tumour signal. Caveats: CNV-low vs Malignant within a spot is not separable with confidence (their signatures overlap); Mesothelial cells can no longer be mapped; Multiciliated and Plasma in tumour niches may be real (airway-like differentiation, plasma-cell infiltrate) or partial absorption — unverified on n = 1 section.
 
 ### 3.9 ✅ Cell–cell communication — *resolves S11*
 v1: LIANA on pooled tumour cells only. v2: LIANA+ per sample in every condition, differential CCC from pseudobulk DE, Tensor-cell2cell programmes, spatial bivariate LR on Visium.
@@ -309,21 +332,142 @@ Known limitation: **Malignant cells are not in the tensor.** Only ~4 % of per-sa
 **Result (run finished 2026-11-10 21:12, `ccc` 5.3 h):**
 - **Elbow rank = 5**, below the ceiling of 8, so the shorter search did not cut off the optimum and no rerun is needed.
 - **Differential CCC** (paired tumour vs adjacent): the top interactions are neutrophil-derived VEGFA/PLAU signalling (→ CD44 on NK, PLAUR on macrophages) and the TIGIT–NECTIN2 checkpoint axis between CD4 T cells and macrophages/monocytes. CEACAM1 → HAVCR2 (TIM-3) on CD8 T cells also ranks in the top 20.
-- **Tensor factors** (82 samples × 868 LR pairs × 10 × 10): Factor 1 is macrophage/cDC-sender (antigen presentation: B2M–CD1A/B, GRN–TNFR); Factor 3 is fibroblast/EC-sender to cytotoxic T (LCK–CD8, GZMA–F2R); Factor 5 is fibroblast/monocyte-sender to macrophages (FN1, HGF, MMP1 → CD44). ⚠️ **No factor separates tumour from adjacent-normal samples** (Mann–Whitney on sample loadings, 58 tumour vs 24 adjacent: all p ≥ 0.31). The factors describe communication programmes that vary between samples, not tumour-specific ones. Most likely they track donor and study, since LuCA studies differ in immune enrichment. Reported as such; a study-adjusted test of the loadings is a v2.1 item.
+- **Tensor factors** (82 samples × 868 LR pairs × 10 × 10): Factor 1 is macrophage/cDC-sender (antigen presentation: B2M–CD1A/B, GRN–TNFR); Factor 3 is fibroblast/EC-sender to cytotoxic T (LCK–CD8, GZMA–F2R); Factor 5 is fibroblast/monocyte-sender to macrophages (FN1, HGF, MMP1 → CD44). ⚠️ **No factor separates tumour from adjacent-normal samples** (Mann–Whitney on sample loadings, 58 tumour vs 24 adjacent: all p ≥ 0.31). The factors describe communication programmes that vary between samples, not tumour-specific ones. Most likely they track donor and study, since LuCA studies differ in immune enrichment. Reported as such; a study-adjusted test of the loadings is a v2.1 item. *(Run 1.)*
 
-### 3.10 🚧 Post-run review — open issues (2026-11-11)
+**Run 2 (2026-11-13, §3.11):** `ccc` 7.0 h. The tensor now has **82 samples × 951 LR pairs × 11 × 11**: `Tumour epithelial (CNV-low)` is present in enough samples to enter, so tumour-epithelial communication is in the tensor for the first time (`Malignant` still is not). Elbow rank **6** (ceiling 8). The CNV-low group loads most on Factor 5 (sender 0.42, with macrophages 0.55 and cDC 0.40; top LR pairs LAMB3–CD44, CXCL8–CD79A, GNAI2–EGFR, S100A9–CD68). Factor 6 is a chemokine programme from CD8 T / NK / classical monocytes (CCL5/CCL4 → CCR1). Still **no factor separates tumour from adjacent** (52 vs 24 samples, all p ≥ 0.34), so §3.10 #4 stands. Differential CCC is unchanged except that `Unknown`-sender rows (e.g. NECTIN4 → TIGIT in run 1's top 5) drop out: those were tumour cells hiding in `Unknown`.
+
+### 3.10 ✅ Post-run review — open issues (2026-11-11)
 
 The pipeline ran end to end, but reading the outputs (not just the exit codes) showed the issues below. They are listed by how much they change conclusions. None of them is a crash, so all of them would have shipped silently without this review.
 
 | # | Issue | Evidence | Effect | Proposed fix | Status |
 |---|---|---|---|---|---|
-| 1 | **Milo tested the wrong contrast** | `milo.da_nhoods(design="~condition")` with no `model_contrasts`. pertpy then tests the *last* level alphabetically, `tumour_region_unknown` (2 HLCA donors), against the reference `adjacent_normal` | the 0 significant neighbourhoods are meaningless, not a null result | `model_contrasts="conditiontumour - conditionadjacent_normal"` on tumour + adjacent samples, with donor in the design (paired, like DE). Rerun Milo only (minutes; scCODA unaffected) | open |
-| 2 | **`Unknown` holds ~25k un-called malignant cells** | 57,335 `Unknown` cells; 29,172 have the LuCA author label `malignant cell`, and only 3,903 of those pass the CNV threshold | `Unknown` is mostly tumour cells mixed with unmapped HLCA cells. It contaminates scCODA (chosen as the reference type), DE (7,947 genes) and CCC (top-20 rows). | split it: label CNV-low author-malignant cells as a separate group (e.g. `Tumour epithelial (CNV-low)`), keep `Unknown` for truly unmapped cells, and fix the scCODA reference to a stable type (e.g. Fibroblast or EC capillary). Reruns cnv → downstream | open — needs decision |
-| 3 | **Rare epithelial absorbs tumour signal in cell2location** | 66-cell reference (ionocyte/PNEC/brush) → 66 % of the tumour niche | spatial cell-type abundances are wrong for epithelium | drop or merge reference labels below a minimum size (e.g. < 200 cells) before building signatures. Fixing #2 also gives the reference a proper tumour-epithelium signature. Reruns deconvolve (~10 h CPU) → spatial → ccc spatial part | open — needs decision |
-| 4 | Tensor factors do not separate conditions | see §3.9 | interpretation only | report as sample-level programmes; v2.1 study-adjusted test | documented |
+| 1 | **Milo tested the wrong contrast** | `milo.da_nhoods(design="~condition")` with no `model_contrasts`. pertpy then tests the *last* level alphabetically, `tumour_region_unknown` (2 HLCA donors), against the reference `adjacent_normal` | the 0 significant neighbourhoods are meaningless, not a null result | `model_contrasts="conditiontumour - conditionadjacent_normal"` on tumour + adjacent samples, with donor in the design (paired, like DE). Rerun Milo only (minutes; scCODA unaffected) | ✅ resolved, run 2 (§3.11) |
+| 2 | **`Unknown` holds ~25k un-called malignant cells** | 57,335 `Unknown` cells; 29,172 have the LuCA author label `malignant cell`, and only 3,903 of those pass the CNV threshold | `Unknown` is mostly tumour cells mixed with unmapped HLCA cells. It contaminates scCODA (chosen as the reference type), DE (7,947 genes) and CCC (top-20 rows). | split it: label CNV-low author-malignant cells as a separate group (e.g. `Tumour epithelial (CNV-low)`), keep `Unknown` for truly unmapped cells, and fix the scCODA reference to a stable type (e.g. Fibroblast or EC capillary). Reruns cnv → downstream | ✅ resolved, run 2 (§3.11) |
+| 3 | **Rare epithelial absorbs tumour signal in cell2location** | 66-cell reference (ionocyte/PNEC/brush) → 66 % of the tumour niche | spatial cell-type abundances are wrong for epithelium | drop or merge reference labels below a minimum size (e.g. < 200 cells) before building signatures. Fixing #2 also gives the reference a proper tumour-epithelium signature. Reruns deconvolve (~10 h CPU) → spatial → ccc spatial part | ✅ resolved, run 2 (§3.8, §3.11) |
+| 4 | Tensor factors do not separate conditions | see §3.9 | interpretation only | report as sample-level programmes; v2.1 study-adjusted test | documented; still true in run 2 (all p ≥ 0.34) |
 | 5 | SOLO vs Scrublet disagreement | 41,531 vs 2,082 flagged; consensus 672 | doublet removal is effectively Scrublet-only; SOLO's rate looks miscalibrated on atlas data that the original authors already QC'd | check SOLO's score distribution per study. Consensus is the conservative choice, so no rerun for v2.0 | documented |
 | 6 | Atlas mixing below random for every cell type | e.g. Fibroblast 0.125 vs 0.493 expected | partly expected (HLCA ≈ healthy, LuCA ≈ tumour, so the same label differs in state), but it limits cross-atlas claims | add a condition-matched mixing metric (adjacent-normal LuCA vs healthy HLCA within type) | documented |
-| 7 | `report` provenance row is one run stale | the report reads `provenance/report.json` before writing its own | cosmetic | write own provenance first, or exclude self | documented |
+| 7 | `report` provenance row is one run stale | the report reads `provenance/report.json` before writing its own | cosmetic | write own provenance first, or exclude self | ✅ fixed, run 2 (§3.11) |
+
+### 3.11 ✅ Run 2 — fixes for §3.10 #1–#3 (2026-11-12/13)
+
+Decisions taken unattended under defaults agreed with the user ("start on #1–#3"), each config-driven and
+reversible. Open questions are collected in [docs/v3/FIXES_RUN2.md](docs/v3/FIXES_RUN2.md).
+
+**#1 Milo contrast.** `de.milo_design()` keeps only `tumour` + `adjacent_normal` samples of donors who gave both
+(14 donors, 48 samples post-QC), designs `~donor_id + condition` and passes the explicit
+`model_contrasts="conditiontumour - conditionadjacent_normal"` (config `abundance.milo_contrast`). The kNN graph and
+neighbourhoods are rebuilt on that subset (healthy and region-unknown cells would otherwise sit in neighbourhoods
+that the test can't use). Checked against the installed pertpy 1.5.0: with a contrast, `da_nhoods` drops the
+intercept (`+ 0`), so donor gets full dummy coding and condition one treatment-coded column; the contrast resolves
+to that column (unit test `test_milo_contrast_matches_pertpy_coefficients` builds the design with formulaic and runs
+pertpy's own `_contrast_vector`). Default solver = pydeseq2 (R-free); 48 samples vs 15 coefficients leaves 33
+residual df. **Rejected:** a random donor intercept `(1 | donor_id)` (pertpy's mixed model; slower, and the fixed
+donor term matches the primary pseudobulk DE exactly); keeping all conditions with `subset_samples` (neighbourhoods
+built partly from cells that are never tested). Milo failures now fail the step (run 1 swallowed them with a
+warning; same rule as `ccc`, §3.9).
+
+**#2 `Unknown` split + scCODA reference.**
+- `make_de_groups()` (cnv step) gives cells whose LuCA author label is `malignant cell`, that sit in a tumour sample
+  (`cnv.tumour_conditions`) and fail the CNV threshold, the new group **`Tumour epithelial (CNV-low)`**
+  (`cnv.cnv_low_label`). `Malignant` (CNV-high) is unchanged; `Unknown` keeps only cells without a usable label
+  (mostly 25,951 unannotated HLCA cells). The **64** author-malignant cells in *adjacent-normal* samples stay
+  `Unknown`: a tumour label in normal tissue would enter the paired DE and CCC as if it had a counterpart. The split
+  lives in `de_group` (the analysis grouping), **not** in `harmonised_label`, which steered scANVI: changing it would
+  force re-integration (2 h) for no gain, since the crosswalk deliberately maps the author label to `Unknown` so it
+  never steers integration (§3.3 E). Expected size from run-1 objects: 25,205 cells.
+- **scCODA reference = `cDC`** (`abundance.sccoda_reference`, was `automatic` → `Unknown`). Chosen from per-sample
+  proportions in run-1 objects (215 samples, new grouping):
+
+  | Candidate | present in samples (min over conditions) | CV of proportion | mean prop. adjacent / healthy / tumour |
+  |---|---|---|---|
+  | **cDC** | 87 % (81 %) | 1.21 | 0.024 / 0.019 / 0.021 |
+  | Macrophage | 89 % (84 %) | 1.05 | 0.201 / 0.277 / 0.111 |
+  | Fibroblast | 71 % (50 %) | 3.51 | 0.008 / 0.028 / 0.024 |
+  | EC capillary | 56 % (46 %) | 3.25 | 0.053 / 0.019 / 0.014 |
+
+  The brief suggested Fibroblast or EC capillary; the data rule them out: several LuCA studies are CD45-enriched, so
+  stromal/endothelial cells are absent from 29–44 % of samples, and a reference must be present almost everywhere.
+  Macrophage is the most ubiquitous but itself changes 2.5× between tumour and healthy (a reference is assumed
+  constant). cDC is nearly as ubiquitous with a flat mean across conditions. No type reaches scCODA's own 95 %
+  presence rule, which is why "automatic" fell back to the mixed `Unknown`.
+- **Downstream treatment of the new group:**
+
+  | Analysis | Treatment | Why |
+  |---|---|---|
+  | Paired / unpaired DE | not tested (`de.tumour_only_groups`, like `Malignant`) | no counterpart in control tissue |
+  | New DE contrast `cnvlow_tumour_vs_healthy_basal` | CNV-low group vs healthy basal, unpaired, same code as `malignant_vs_healthy_basal` (`de.vs_healthy_basal`) | shows whether the CNV-low cells look like tumour epithelium (validates the label) |
+  | scCODA, Milo | included as a cell type | it is a real, tumour-only population |
+  | LIANA by-sample, tensor | included (tensor still excludes `Unknown`); enters the tensor only if present in ≥ 1/3 of tensor samples | tumour-cell communication was missing from the run-1 tensor |
+  | Differential CCC | absent (no DE stats; not in the paired contrast) | same as `Malignant` |
+  | Trajectory | **not** included (Basal + CNV-called Malignant only) | the endpoint must stay CNV-confirmed; adding unconfirmed cells would blur it (v2.1 option) |
+  | cell2location reference | included | gives the reference a real tumour-epithelium signature (#3) |
+
+**#3 cell2location reference.** `deconvolve.prepare_reference_labels()` runs before signature building
+(config `spatial.c2l.min_ref_cells: 200`, `merge_small_labels: {}`, `exclude_labels: [Unknown]`) and writes
+`results/tables/c2l_reference_labels.csv`. Counts are taken on the full reference before the per-label subsample.
+Expected from run-1 objects: `Rare epithelial` (66 cells) and `Mesothelial` (91) dropped. No merge: the crosswalk
+gives no obvious parent (ionocytes/PNEC/brush cells are not secretory or basal; mesothelium is not fibroblast).
+`Unknown` (28k cells after the split) is excluded because a signature of a mixed bucket is exactly the kind of
+catch-all that absorbed tumour signal. Rejected: lowering `max_ref_cells_per_label` or reweighting (doesn't fix a
+66-cell signature), keeping `Rare epithelial` with a prior (no principled prior from one section).
+
+**#7 report provenance** (trivial, fixed): `steps.report` writes a preliminary `provenance/report.json` before
+building the report, so the provenance table shows the current run. `run_step` overwrites it with the final runtime.
+The report also gained a Milo section (design, contrast, counts by cell type) and prints the scCODA reference.
+
+**Verification before the rerun:** 9 unit tests (`tests/test_fixes_run2.py`); `scripts/smoke_test.py --run2`
+(12k real cells from 56 whole samples incl. all 48 paired samples: de_group split → all DE contrasts incl. both
+vs-healthy-basal → pathways → scCODA with reference cDC → Milo paired, 48 samples / 14 donors) passed in 132 s;
+`pixi run -e c2l python scripts/smoke_test.py --c2l` (reference decisions → RegressionModel → Cell2location, tiny
+epochs; `Unknown` absent from the output) passed in 202 s.
+
+**Rerun:** run 1's small outputs archived to `results/_archive_run1_2026-11-10/` (tables, reports, figures, the
+run-1 DuckDB, stamps, log; git-ignored). `run_all.py --only cnv de abundance trajectory deconvolve spatial ccc report
+export --force --keep-going` in tmux `lusc-v2:pipeline`, started 2026-11-12 11:18 PST. `--only` + `--force` reruns
+exactly the steps downstream of the change (upstream `qc`/`integrate`/`spatial_prep` keep their stamps);
+`trajectory` is rerun although its definition is unchanged, so no output depends on a stale input.
+
+**Result (2026-11-13 07:07 PST, ALL DONE, no failures, 19.8 h wall):** cnv 10 min · de 4 min · abundance 77 min
+· trajectory 4 min · **deconvolve 11.2 h** · spatial 2 min · **ccc 7.0 h** · report 1 min · export 43 s.
+
+| | Run 1 (2026-11-10) | Run 2 (2026-11-13) |
+|---|---|---|
+| Milo (SpatialFDR < 0.1) | 0 / 17,511, wrong contrast | **1,671 / 6,225** (917 up, 754 down in tumour), paired, 14 donors / 48 samples |
+| scCODA reference | automatic → `Unknown` (mixed) | `cDC` (fixed) |
+| scCODA tumour vs adjacent (credible log2FC) | NK −0.95, CD8 T −0.82, CD4 T −0.67, Mono NC −0.33, AT2 −0.30, Mac −0.22, AT1 −0.19 | NK −1.15, CD8 T −0.80, CD4 T −0.66, Mono NC −0.43, AT2 −0.37, Mac −0.33, AT1 −0.29, EC lymphatic −0.12; CNV-low tumour +2.23 |
+| `Unknown` cells | 57,335 (incl. ~25k tumour cells) | 28,224 (unannotated HLCA + 64 adjacent author-malignant) |
+| `Tumour epithelial (CNV-low)` | — (inside `Unknown`) | 25,205 cells |
+| `Malignant` (CNV-called) | 3,942 | 3,942 (identical; threshold 0.0129 reproduced) |
+| Paired DE significant rows | 9,665 (`Unknown` 2,181) | 8,474 (`Unknown` 990; all other groups identical) |
+| Tumour epithelium vs healthy basal | Malignant 300 genes | Malignant 300; **CNV-low 1,040** (40 vs 22 samples) |
+| cell2location reference | 27 labels incl. Rare epithelial (66 cells) | 25 labels (Rare epithelial, Mesothelial dropped; `Unknown` excluded) |
+| Tumour-niche composition | Rare epithelial 66 %, Malignant 11 % | CNV-low tumour 40–62 %, Malignant 12–14 % |
+| CellCharter niches (auto-K) | 3 | 9 (5 epithelial/tumour, 1 SMC–fibroblast, 3 stromal–myeloid) |
+| Tensor | 82 × 868 × 10 × 10, rank 5 | 82 × 951 × 11 × 11 (+ CNV-low), rank 6 |
+| Tensor factor vs condition | all p ≥ 0.31 | all p ≥ 0.34 (unchanged, §3.10 #4) |
+| Differential CCC top 10 | incl. `Unknown` → CD4 T NECTIN4–TIGIT | same rows minus the `Unknown` one |
+
+**Does the CNV-low label hold up?** Against healthy basal cells it shows the LUSC programme: **SOX2** (3q26, the
+defining LUSC amplicon) log2FC +2.24, **TP63** +1.40, **CDKN2A** +5.56, and DLX5 is the top non-technical gene in
+both the CNV-low and Malignant contrasts; 58 of Malignant's 118 up-genes are also up in CNV-low. These are tumour
+cells whose CNV signal is below a deliberately conservative threshold, not mislabelled normal epithelium. Caveat:
+the top-ranked CNV-low genes are mitochondrial pseudogenes (MTCO3P18, MTND4P33, …), a study/chemistry artefact
+that the `~assay + epi_state` design does not fully absorb; read the list from the marker genes, not the top rows.
+
+**Found by the post-run checks:** CellCharter picked 9 niches, one more than the dashboard's 8-colour palette, so the
+Spatial page crashed (`IndexError`, caught by `tests/test_dashboard.py`). Fix: `ui.series_color(i)` (8 validated
+colours + 4 extra, then cycle) and a regression test.
+
+**Checks after the run:** `pixi run lint` and `ruff format --check` clean; default tests 24 passed / 2 skipped;
+dashboard + agent tests 45 passed; `agent-eval --check` 24 items, 0 grader failures (truths recomputed on the run-2
+DB, no LLM); `scripts/cloud_dry_run.sh` passed on the run-2 DB (15/15 pages, DB via secrets + `hf_hub_download`,
+peak RSS 440 MB = 16 % of 2.7 GB, wrong sha256 refused, health OK; `.tooling/cloud_dry_run_4.log`, after re-exporting with the updated known-issues text). App restarted
+in `lusc-v2:app` on the new DB.
+
+Still open (documented, not fixed here): #4 tensor not condition-specific, #5 SOLO/Scrublet, #6 atlas mixing;
+Mesothelial can't be mapped spatially; trajectory still covers Basal + CNV-called Malignant only.
 
 ---
 
@@ -353,11 +497,11 @@ v2 turns each one into something that survives expert questioning. Checked again
 | **PAGA trajectory** | PAGA graphs; `04_trajectory` never ran | ⚠️ partial | **Palantir pseudotime + CellRank 2** (CytoTRACE + pseudotime kernels), rooted in healthy basal cells (`trajectory.py`) |
 | **LIANA** ligand–receptor | rank_aggregate on pooled tumour cells | ✅ (narrow) | **LIANA+ per sample, all conditions**, differential CCC, Tensor-cell2cell, spatial bivariate LR (`ccc.py`) |
 | Disease-associated **immune, epithelial, stromal** states | compartment-level UMAPs/markers | ✅ | + CNV-defined **malignant** state, scCODA/Milo abundance shifts, CellCharter spatial **niches** |
-| **Mapped 36 cell types into tissue space** | per-spot cosine scores for 27 type columns (`05_integration`) | ⚠️ count/method | per-spot **cell-type abundances** for 27 harmonised types incl. Malignant (`results/tables/c2l_abundance.csv`); ⚠️ epithelial abundances pending §3.10 #3 |
+| **Mapped 36 cell types into tissue space** | per-spot cosine scores for 27 type columns (`05_integration`) | ⚠️ count/method | per-spot **cell-type abundances** for 25 harmonised types incl. Malignant and CNV-low tumour epithelium (`results/tables/c2l_abundance.csv`; run 2 fixed the §3.10 #3 artefact) |
 | Led a **five-member team** | 5 authors, git history (2 committers) | ✅ | unchanged; authors in `CITATION.cff` |
 
 **Suggested v2 wording.** Numbers are copied from `results/reports/summary.md` / `results/tables/`
-(run of 2026-11-10), not typed from memory:
+(run 2, 2026-11-13), not typed from memory:
 
 > *Spatial transcriptomics of squamous lung cancer (v2, reproducible pipeline).* Led a five-member team;
 > rebuilt the analysis as a tested, Snakemake/pixi-pinned Python package. Merged two curated atlases (HLCA +
@@ -365,13 +509,14 @@ v2 turns each one into something that survives expert questioning. Checked again
 > Cell-Ontology label harmonisation; benchmarked seven embeddings (incl. scVI/scANVI/sysVI/Harmony, scArches and
 > a Geneformer foundation-model baseline) with scib-metrics and an over-correction guard (scANVI selected).
 > Called **3,942** malignant cells by inferred CNV (chr3q-gain validated), ran donor-paired pseudobulk DESeq2
-> with PROGENy/CollecTRI/Hallmark activity, compositional (scCODA) abundance, Palantir/CellRank 2 trajectories,
-> and LIANA+ differential, tensor (Tensor-cell2cell) and spatial cell–cell communication; deconvolved **6,191**
-> Visium spots with cell2location into **27** cell types and **3** CellCharter niches.
+> with PROGENy/CollecTRI/Hallmark activity, compositional (scCODA) and donor-paired neighbourhood (Milo:
+> **1,671** of 6,225 neighbourhoods shifted in tumour) abundance, Palantir/CellRank 2 trajectories, and LIANA+
+> differential, tensor (Tensor-cell2cell) and spatial cell–cell communication; deconvolved **6,191** Visium spots
+> with cell2location into **25** cell types and **9** CellCharter niches.
 
-Held back until §3.10 is resolved: **Milo** (#1, wrong contrast) is left out of the wording on purpose. The
-cell2location and malignant-cell numbers are accurate as counts, but the per-type spatial findings (#3) and
-the scCODA directions (#2) should not be quoted yet.
+Run 2 resolved §3.10 #1–#3, so Milo, the scCODA directions and the per-type spatial abundances can now be quoted.
+Still not to be claimed: tumour-specific communication programmes from the tensor (#4: no factor separates
+tumour from adjacent).
 
 ---
 
@@ -400,3 +545,6 @@ the scCODA directions (#2) should not be quoted yet.
 | 2026-11-11 | v2.1 dashboard built on branch `v2.1-dashboard` (ROADMAP_v2.1 §6): new `export` step → DuckDB serving snapshot (118 MB, derived, never source of truth) in a separate pixi env `dashboard`; Streamlit app with one page per stage (question → decision → evidence → known-issue banners); page-render tests. Building it surfaced a count discrepancy: the post-QC object holds **151** donors, not the 160 quoted in §3.4 (160 = `cohort_donors`, pre-QC; 8 small healthy HLCA donors + 1 LuCA tumour donor have no cells in `sc_annotated.h5ad`) — to verify and correct |
 | 2026-11-12 | **Zero-cost decision:** project must stay free → "Ask the atlas" chatbot page removed from the dashboard and the deploy bundle (needs a paid LLM key; page parked outside the repo); anthropic/openai dropped from app/requirements.txt; hosting = Streamlit Community Cloud + HF Dataset. Agent library, eval and MCP server kept, unwired (docs/v3/README.md decision note). |
 | 2026-11-12 | v3 concepts (docs/v3/README.md), additive and uncommitted: **A** agentic layer `src/lusc_atlas/agent/` (11 read-only DuckDB tools incl. 8 curated, caveat-aware; Claude default + OpenAI-compatible Nemotron provider; tool-use loop with SQL provenance and a post-hoc number-grounding check; MCP server; "Ask the atlas" page; 24-question eval with SQL-computed truths, not yet run live: no keys); **B** Nemotron assessment (open-weights fallback, no GPU here, hosted API prototyping-only); **C** DuckDB enforced as the single serving source of truth (schema contract + runtime-read tests, schema v2: page_guide, glossary, step_stamps, config/content hashes), Start-here page + computed reader guide on every stage page + glossary, HF Docker-Space bundle + `deploy_space.sh` (not run) + local dry deploy (16/16 pages, 435 MB). Finding: HF Docker/Gradio Spaces now need a paid plan; Streamlit SDK deprecated 2025-04-30. §3.4 donor count corrected 160 → 151 post-QC (wording only) |
+| 2026-11-12 | **Free-only hosting implemented** (§1.3): HF Docker-Space bundle parked outside the repo; `scripts/publish_dataset.sh` (DuckDB → public HF Dataset, never a Space; user-run) and `scripts/cloud_dry_run.sh` (clean clone, Python 3.12 venv from `app/requirements.txt`, secrets, DB via `hf_hub_download`, all pages, wrong-sha negative control) — passed on the run-1 DB (15/15 pages, 444 MB); `.streamlit/config.toml` moved to repo root; DB location read from env or `st.secrets` |
+| 2026-11-12 | §3.10 #1–#3 + #7 fixed in code (§3.11): paired Milo contrast; `Tumour epithelial (CNV-low)` split out of `Unknown` + new vs-healthy-basal contrast; scCODA reference `cDC`; cell2location reference ≥ 200 cells, `Unknown` excluded; report provenance current. 9 unit tests + `smoke_test.py --run2` / `--c2l` passed. Run-1 outputs archived; run 2 launched 11:18 PST |
+| 2026-11-13 | **Run 2 ALL DONE** 07:07 PST (19.8 h; deconvolve 11.2 h, ccc 7.0 h): Milo 1,671 / 6,225 significant (run 1: 0); scCODA directions hold with cDC reference; CNV-low group 25,205 cells (SOX2/TP63/CDKN2A up vs healthy basal); tumour niches now CNV-low tumour 40–62 % + Malignant 12–14 % (run 1: Rare epithelial 66 %); 9 niches; tensor 11 × 11 incl. CNV-low, rank 6, still not condition-specific. Dashboard palette crash on 9 niches fixed; all checks + cloud dry run (440 MB) pass. Write-up: `docs/v3/FIXES_RUN2.md` |

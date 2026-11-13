@@ -157,6 +157,9 @@ cnv:
   tumour_conditions: [tumour, tumour_region_unknown]      # malignant calls only allowed here
   check_arms: ["chr3q"]              # LUSC hallmark gain (SOX2/TP63) — positive control
   author_label_check: "malignant cell"   # LuCA author label → concordance with our CNV calls
+  # §3.10 #2 (run 2): author-"malignant" cells in tumour samples that FAIL the CNV threshold get their own
+  # group instead of falling into `Unknown`. `Malignant` (CNV-high) is unchanged. Author label column = cell_type.
+  cnv_low_label: "Tumour epithelial (CNV-low)"
 
 # -----------------------------------------------------------------------------
 # 5. Differential expression, pathways, abundance (Squair 2021; Muzellec 2023)
@@ -167,6 +170,12 @@ de:
   condition_key: condition
   min_cells_per_pseudobulk: 10
   min_samples_per_condition: 3
+  # groups that exist only in tumour tissue: never tested in case-vs-control contrasts (no counterpart)
+  tumour_only_groups: [Malignant, "Tumour epithelial (CNV-low)"]
+  # each is compared with healthy-donor Basal pseudobulks (unpaired; study/assay when not collinear)
+  vs_healthy_basal:
+    malignant_vs_healthy_basal: Malignant
+    cnvlow_tumour_vs_healthy_basal: "Tumour epithelial (CNV-low)"
   contrasts:
     # PRIMARY: paired within donor → donor & study effects cancel by design (§3.3 H)
     paired_tumour_vs_adjacent: {case: tumour, control: adjacent_normal, paired: true}
@@ -178,9 +187,16 @@ de:
     collectri: true
     hallmark: true
 abundance:
-  sccoda_reference: automatic
+  # §3.10 #2: fixed reference (run 1's "automatic" picked `Unknown`, a mixed bucket). cDC chosen from the data:
+  # present in 87 % of samples (≥ 80 % in every condition) with near-flat mean proportion across conditions
+  # (adjacent 0.024 / healthy 0.019 / tumour 0.021). Fibroblast / EC capillary are absent from 29 % / 44 % of
+  # samples (several LuCA studies are CD45-enriched), Macrophage changes 2.5× between conditions. DEVELOPMENT_LOG §3.11.
+  sccoda_reference: cDC
   milo_k: 30
   milo_prop: 0.1
+  # §3.10 #1: explicit paired contrast on tumour + adjacent-normal samples of donors with both (like the primary DE)
+  milo_contrast: {case: tumour, control: adjacent_normal, paired: true}
+  milo_spatial_fdr: 0.1
 
 # -----------------------------------------------------------------------------
 # 6. Trajectory (CellRank 2 + Palantir; Weiler 2024, Setty 2019)
@@ -208,6 +224,11 @@ spatial:
     n_cells_per_location: 10         # FFPE lung tumour, 55 µm spots (cell2location tutorial guidance)
     detection_alpha: 20
     max_ref_cells_per_label: 3000
+    # §3.10 #3: reference labels with fewer cells than this (in the full atlas, before subsampling) are merged
+    # into a parent (merge_small_labels) or dropped before signature building; written to c2l_reference_labels.csv.
+    min_ref_cells: 200
+    merge_small_labels: {}           # e.g. {"Rare epithelial": Secretory}; none is obvious from the crosswalk
+    exclude_labels: [Unknown]        # a mixed bucket has no coherent signature and would absorb signal
   svg_top: 100
   nhood_n_rings: 1
   cellcharter:

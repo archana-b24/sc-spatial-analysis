@@ -15,7 +15,17 @@ from .db import meta, q
 
 # validated reference palette, light-mode steps (dataviz references/palette.md)
 SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+# 4 extra hues for categorical sets above 8 (run 2: auto-K picked 9 niches); beyond 12 colours cycle
+SERIES_EXTRA = ["#0f9fb3", "#8c5a2b", "#b8338a", "#5c6f1e"]
 GREY = "#b9b8b2"
+
+
+def series_color(i: int) -> str:
+    """Categorical colour i: the 8 validated SERIES first, then SERIES_EXTRA, then cycle."""
+    pal = SERIES + SERIES_EXTRA
+    return pal[i % len(pal)]
+
+
 CONDITION_ORDER = ["healthy", "adjacent_normal", "tumour", "tumour_region_unknown"]
 CONDITION_COLOR = dict(zip(CONDITION_ORDER, SERIES[:4], strict=True))
 CONDITION_LABEL = {
@@ -62,7 +72,10 @@ def caveats(stage: str) -> None:
         icon = SEVERITY_ICON.get(r.severity, "⚠️")
         head = f"{icon} **Known issue ({r.severity}, {r.status}): {r.title}.**"
         body = f"{head} {r.detail} *(DEVELOPMENT_LOG {r.log_ref})*"
-        (st.warning if r.severity == "high" else st.info)(body)
+        if str(r.status).startswith("resolved"):
+            st.success(f"✅ **Resolved ({r.status}): {r.title}.** {r.detail} *(DEVELOPMENT_LOG {r.log_ref})*")
+        else:
+            (st.warning if r.severity == "high" else st.info)(body)
 
 
 def footer() -> None:

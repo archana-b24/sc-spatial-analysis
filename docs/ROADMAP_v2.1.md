@@ -156,6 +156,8 @@ See DEVELOPMENT_LOG §4. **2026-11-12: three v3 concepts prototyped — agentic 
 assessment (B), dashboard explainers + single-source-of-truth enforcement + hosting bundle (C) — index, verdicts
 and open questions in [docs/v3/README.md](v3/README.md).** Hosting note for item 6: Hugging Face now requires a
 paid plan for Docker Spaces; options compared in [docs/v3/C_dashboard_hosting.md](v3/C_dashboard_hosting.md).
+**Decided 2026-11-12 (zero-cost rule): Streamlit Community Cloud + public HF Dataset**; the Space path was removed
+(`scripts/publish_dataset.sh`, `scripts/cloud_dry_run.sh`; C §3 and "Cost: $0").
 
 ---
 

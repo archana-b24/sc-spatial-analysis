@@ -70,8 +70,7 @@ questions:
       SELECT count(*) FILTER (WHERE padj < 0.05) n FROM de_pseudobulk
       WHERE contrast = 'paired_tumour_vs_adjacent' GROUP BY "group" ORDER BY n DESC LIMIT 1
     grade: {type: number, tol_rel: 0.0}
-    # the top group is `Unknown`, which is contaminated by un-called malignant cells (known issue 2)
-    must_mention: [["unknown"], ["malignant", "issue", "caveat", "contaminat"]]
+    # run 2: `Unknown` no longer holds the CNV-low tumour cells (§3.11), so no label-specific caveat is required
 
   - id: q08_macrophage_up
     category: de
@@ -104,14 +103,14 @@ questions:
       SELECT "Cell Type" FROM composition_sccoda WHERE Covariate LIKE '%T.tumour]%'
       AND "Inclusion probability" >= 0.8
     grade: {type: set, min_hits: 4}
-    must_mention: [["reference"], ["unknown"]]
+    must_mention: [["reference"], ["relative"]]
 
   - id: q12_milo
     category: composition
-    question: How many Milo neighbourhoods are significant, and can that result be interpreted?
+    question: How many Milo neighbourhoods change between tumour and adjacent tissue, and what design was used?
     truth_sql: SELECT count(*) FILTER (WHERE SpatialFDR < 0.1) FROM milo_nhoods
     grade: {type: number, tol_rel: 0.0}
-    must_mention: [["contrast", "wrong", "not interpretable", "meaningless"]]
+    must_mention: [["paired", "donor", "patient"]]
 
   - id: q13_top_ccc
     category: ccc
@@ -144,12 +143,12 @@ questions:
     grade: {type: number, tol_rel: 0.0}
     must_mention: [["3 niches", "three niches", "3 cellcharter", "three"]]
 
-  - id: q17_rare_epithelial
+  - id: q17_c2l_reference
     category: caveat
-    question: What fraction of niche 0 is Rare epithelial, and should I believe it?
-    truth_sql: SELECT "Rare epithelial" FROM spatial_niches WHERE niche = 0
-    grade: {type: number, tol_abs: 0.01, as_percent: true}
-    must_mention: [["artefact", "artifact", "known issue", "should not", "not biology", "absorb"]]
+    question: Which cell types were left out of the cell2location reference, and why?
+    truth_sql: SELECT label FROM c2l_reference_labels WHERE action <> 'kept'
+    grade: {type: set, min_hits: 2}
+    must_mention: [["too few", "small", "minimum", "mixed", "noisy"]]
 
   - id: q18_doublets
     category: aggregate

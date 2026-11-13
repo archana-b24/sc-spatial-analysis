@@ -17,6 +17,8 @@ section. It is the serving snapshot behind the project's dashboard, rebuilt from
 pipeline outputs by the `export` step and never edited by hand.
 
 * Code, pipeline, decision log: https://github.com/archana-b24/sc-spatial-analysis
+* Dashboard: Streamlit Community Cloud app built from that repo (`app/streamlit_app.py`); it downloads this file at
+  start-up, pinned to a commit of this dataset and verified by sha256
 * Inputs: public CELLxGENE releases of the Human Lung Cell Atlas and the Lung Cancer Atlas (LuCA), and the 10x
   Genomics FFPE LUSC Visium dataset; see the repository for exact versions and checksums.
 

@@ -140,7 +140,8 @@ question ─▶ ChatSession (Claude | Nemotron/OpenAI-compatible | Fake)
 | CLI | `python -m lusc_atlas.agent "…"` (`pixi run -e dashboard ask`) | Prints answer + provenance; `--json` for the full record |
 
 **Why `src/lusc_atlas/agent/` and not `app/agent/`:** four consumers (Streamlit page, MCP server, eval runner, CLI)
-import it, and it depends only on duckdb/pandas plus optional SDKs, never on the analysis stack. 
+import it, and it depends only on duckdb/pandas plus optional SDKs, never on the analysis stack. The Space bundle that
+vendored it (`scripts/build_space.py`) was parked on 2026-11-12 under the zero-cost rule.
 
 **Why curated tools *and* SQL:** the curated tools encode the decisions a reader should not have to rediscover
 (which contrast is primary, that scCODA effects are relative to `Unknown`, that padj not p is the cut). SQL is

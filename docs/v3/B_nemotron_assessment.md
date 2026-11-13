@@ -125,10 +125,11 @@ the first call, so real Claude costs should land below these estimates.
 
 1. **Done now:** pluggable provider; Nemotron default model + reasoning switch; mocked tests; eval runner that
    compares providers on identical, data-derived ground truth.
-2. **When you have keys (~$3 total):** `ANTHROPIC_API_KEY=… NVIDIA_API_KEY=… pixi run -e dashboard agent-eval
+2. **Not planned (free-only decision, 2026-11-12):** the paid half of this step is off. Free variant: compare
+   against a local GGUF Nemotron via `NVIDIA_BASE_URL` only. Original plan, kept for the record — *when you have keys (~$3 total):* `ANTHROPIC_API_KEY=… NVIDIA_API_KEY=… pixi run -e dashboard agent-eval
    --providers anthropic,nvidia`. Run Nemotron twice, reasoning on and off (`reasoning=` in `make_session`; add a CLI
    flag if useful). Decide on measured pass rate, grounding rate and caveat rate, not on benchmarks.
-3. **If Nemotron is within a few points of Claude:** offer it as the public Space's default through a production-legal
+3. *(Moot while the site has no chatbot.)* **If Nemotron is within a few points of Claude:** offer it as the public site's default through a production-legal
    host (OpenRouter or self-hosted), keep Claude as the quality option. If not: keep it as the documented
    open-weights fallback.
 4. **If GPU time appears:** fine-tune Geneformer with BioNeMo recipes as an extra integration-benchmark candidate,

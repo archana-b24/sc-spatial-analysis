@@ -61,7 +61,7 @@ decisions:
     log_ref: "§3.6"
   - stage: composition
     question: Do cell-type proportions change in tumours?
-    decision: scCODA (Bayesian compositional model) per sample, plus Milo neighbourhood testing.
+    decision: scCODA (Bayesian compositional model) per sample with a fixed reference type (cDC), plus Milo neighbourhood testing paired within patient (tumour vs adjacent, ~ donor + condition).
     why: Proportions are compositional; when one type expands, all others shrink. Raw proportion tests ignore this.
     evidence: composition_sccoda, milo_nhoods
     log_ref: "§3.6"
@@ -79,7 +79,7 @@ decisions:
     log_ref: "§3.8"
   - stage: ccc
     question: How do cells communicate, and what changes in tumour?
-    decision: LIANA+ per sample in every condition, differential CCC from the paired DE, Tensor-cell2cell programmes (elbow rank 5), and spatial bivariate ligand–receptor co-expression.
+    decision: LIANA+ per sample in every condition, differential CCC from the paired DE, Tensor-cell2cell programmes (elbow rank 6 in run 2; 5 in run 1), and spatial bivariate ligand–receptor co-expression.
     why: v1 pooled tumour cells only, so nothing could be compared. Per-sample results keep donors as the unit.
     evidence: ccc_differential, ccc_tensor_contexts, ccc_spatial_bivariate
     log_ref: "§3.9"
@@ -95,22 +95,22 @@ known_issues:
     stage: composition
     severity: high
     title: Milo tested the wrong contrast
-    detail: Milo compared `tumour_region_unknown` (2 donors) with adjacent normal instead of tumour vs adjacent, so its 0 significant neighbourhoods are meaningless, not a null result.
-    status: open
+    detail: "Run 1 compared `tumour_region_unknown` (2 donors) with adjacent normal, so its 0 significant neighbourhoods were meaningless. Fixed in run 2: only patients with both tumour and adjacent samples (14 patients, 48 samples), design ~ donor + condition, explicit tumour vs adjacent contrast."
+    status: resolved (run 2)
     log_ref: "§3.10 #1"
   - id: 2
     stage: de
     severity: high
     title: "`Unknown` holds ~25k un-called malignant cells"
-    detail: Of 29,172 author-labelled malignant cells, only 3,903 pass the conservative CNV threshold. The rest fall into `Unknown`, which also served as the scCODA reference type. Treat `Unknown` results and scCODA directions with care.
-    status: open
+    detail: "Of 29,172 author-labelled malignant cells, only 3,903 pass the conservative CNV threshold. In run 1 the rest fell into `Unknown`, which also became the scCODA reference. Fixed in run 2: the 25,205 such cells in tumour samples form their own group, `Tumour epithelial (CNV-low)`; `Unknown` keeps only cells without a usable label; scCODA uses cDC as a fixed reference. `Malignant` (CNV-confirmed) is unchanged and still conservative."
+    status: resolved (run 2)
     log_ref: "§3.10 #2"
   - id: 3
     stage: spatial
     severity: high
     title: Rare epithelial absorbs tumour signal in cell2location
-    detail: A 66-cell reference type gets 66 % of the tumour niche. Per-type spatial abundances for epithelium should not be quoted until this is fixed.
-    status: open
+    detail: "In run 1 a 66-cell reference type (ionocytes, neuroendocrine, brush cells) took 66 % of the tumour niche. Fixed in run 2: reference labels with fewer than 200 cells are dropped (Rare epithelial 66, Mesothelial 91) and `Unknown` is excluded, so 25 signatures remain, including the new `Tumour epithelial (CNV-low)`. The epithelial niches are now 40–62 % CNV-low tumour epithelium plus 12–14 % Malignant. Caveats: the split between CNV-low and Malignant within a spot is not reliable (similar signatures), Mesothelial cells can no longer be mapped, and Multiciliated (11–14 %) and Plasma (6–9 %) still appear in tumour niches."
+    status: resolved (run 2)
     log_ref: "§3.10 #3"
   - id: 4
     stage: ccc

@@ -109,6 +109,24 @@ if bad:
     sys.exit(1)
 PY
 
+echo "== 5b. negative control: a wrong sha256 pin must stop the app (fresh process, no cached resource)"
+env -u PYTHONPATH -u LUSC_DB -u LUSC_DB_HF_REPO -u LUSC_DB_HF_REVISION -u LUSC_DB_SHA256 \
+  "$VENV/bin/python" -I - <<'PY'
+import tomllib
+from pathlib import Path
+from streamlit.testing.v1 import AppTest
+
+secrets = tomllib.loads(Path(".streamlit/secrets.toml").read_text())
+secrets["LUSC_DB_SHA256"] = "0" * 64
+at = AppTest.from_file("app/streamlit_app.py", default_timeout=240)
+for k, v in secrets.items():
+    at.secrets[k] = v
+at.run()
+msgs = " ".join(str(e.value) for e in at.exception)
+assert "checksum mismatch" in msgs, f"wrong pin was not refused: {msgs[:200]!r}"
+print("  ok   wrong sha256 refused:", msgs[:90], "…")
+PY
+
 echo "== 6. serve the clone on :$PORT"
 env -u PYTHONPATH -u LUSC_DB "$VENV/bin/streamlit" run app/streamlit_app.py --server.port "$PORT" \
   --server.headless true --browser.gatherUsageStats false > "$WORK/serve.log" 2>&1 &
