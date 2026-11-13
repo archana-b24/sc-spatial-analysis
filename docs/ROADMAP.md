@@ -1,10 +1,10 @@
-# Roadmap — v2.1 candidates
+# Roadmap — deferred and follow-up items
 
 > Changes **considered but deliberately deferred** from v2.0.0, with the reason they were deferred and what
 > would make them worth doing. v2.0.0 scope and decisions live in [DEVELOPMENT_LOG.md](../DEVELOPMENT_LOG.md).
 > An item moves into a release only when it answers a concrete scientific question with an adequate design.
 
-Status legend: 💡 idea · 🔍 scoping · ✅ accepted for v2.1 · ❌ rejected (with reason)
+Status legend: 💡 idea · 🔍 scoping · ✅ accepted · ❌ rejected (with reason)
 
 | # | Item | Status | Effort | Depends on |
 |---|---|---|---|---|
@@ -14,7 +14,7 @@ Status legend: 💡 idea · 🔍 scoping · ✅ accepted for v2.1 · ❌ rejecte
 | 4 | Ambient-RNA sensitivity analysis | 💡 | S | — |
 | 5 | Survival / TCGA-LUSC projection of malignant programmes | 💡 | M | — |
 | 6 | **Results dashboard** — DuckDB results store + Streamlit app on Hugging Face Spaces (§6) | ✅ | M–L | v2.0 outputs |
-| 7 | v3 groundwork: Claude Skill wrapping the pipeline steps | 💡 | M | v2.0 release |
+| 7 | AI layer: Claude Skill wrapping the pipeline steps | 💡 | M | v2.0 release |
 
 ---
 
@@ -63,7 +63,7 @@ would quantify how much ambient contamination could move the conclusions.
 Score malignant programmes from v2 on TCGA-LUSC bulk RNA-seq (decoupler) and test association with survival and
 the TCGA molecular subtypes (classical / basal / secretory / primitive).
 
-## 6. Results dashboard (accepted for v2.1 on 2026-11-10) — 🚧 built and running locally (2026-11-11), not yet deployed
+## 6. Results dashboard (accepted on 2026-11-10) — 🚧 built and running locally (2026-11-11), not yet deployed
 
 **Goal.** Make the analysis *readable*. Anyone, with or without a programming background, should be able to see what is in
 the data, what each step did and **why**, and the evidence behind each decision. This is the interactive form of
@@ -151,11 +151,11 @@ Run locally: `pixi run -e dashboard export` (or `run_all.py --only export`), the
 4. README badge/link.
 5. Rebuild the snapshot after the §3.10 fixes. The known-issue banners update from `docs/dashboard_content.yaml`.
 
-## 7. v3 groundwork
-See DEVELOPMENT_LOG §4. **2026-11-12: three v3 concepts prototyped — agentic "Ask the atlas" (A), NVIDIA Nemotron
+## 7. AI layer
+See DEVELOPMENT_LOG §4. **2026-11-12: three concepts prototyped — agentic "Ask the atlas" (A), NVIDIA Nemotron
 assessment (B), dashboard explainers + single-source-of-truth enforcement + hosting bundle (C) — index, verdicts
-and open questions in [docs/v3/README.md](v3/README.md).** Hosting note for item 6: Hugging Face now requires a
-paid plan for Docker Spaces; options compared in [docs/v3/C_dashboard_hosting.md](v3/C_dashboard_hosting.md).
+and open questions in [docs/design/README.md](design/README.md).** Hosting note for item 6: Hugging Face now requires a
+paid plan for Docker Spaces; options compared in [docs/design/C_dashboard_hosting.md](design/C_dashboard_hosting.md).
 **Decided 2026-11-12 (zero-cost rule): Streamlit Community Cloud + public HF Dataset**; the Space path was removed
 (`scripts/publish_dataset.sh`, `scripts/cloud_dry_run.sh`; C §3 and "Cost: $0").
 
@@ -165,5 +165,5 @@ paid plan for Docker Spaces; options compared in [docs/v3/C_dashboard_hosting.md
 | Date | Change |
 |---|---|
 | 2026-11-09 | Created; item 1 (histology CNN) deferred from v2.0 by decision |
-| 2026-11-10 | Item 6 widened from "results browser" to the results dashboard (DuckDB + Streamlit on HF Spaces); accepted for v2.1, design under review |
-| 2026-11-12 | §7 points to docs/v3 (concepts A–C); item 6 hosting re-evaluated (HF Docker Spaces need PRO; Streamlit Community Cloud as free fallback) |
+| 2026-11-10 | Item 6 widened from "results browser" to the results dashboard (DuckDB + Streamlit on HF Spaces); accepted, design under review |
+| 2026-11-12 | §7 points to docs/design (concepts A–C); item 6 hosting re-evaluated (HF Docker Spaces need PRO; Streamlit Community Cloud as free fallback) |

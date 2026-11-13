@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Publish the dashboard's DuckDB snapshot as a PUBLIC Hugging Face Dataset (free) — the only upload the
 # free hosting path needs. The app itself is deployed by you on Streamlit Community Cloud from the public
-# GitHub repo (docs/v3/C_dashboard_hosting.md §3.4). Run it yourself; nothing in the repo runs it.
+# GitHub repo (docs/design/C_dashboard_hosting.md §3.4). Run it yourself; nothing in the repo runs it.
 #
 #   export HF_TOKEN=hf_...                 # write token from https://huggingface.co/settings/tokens
 #   scripts/publish_dataset.sh             # shows what it will do, asks, then uploads
@@ -9,11 +9,11 @@
 #   DATASET_NAME=lusc-atlas-db HF_USER=<you> scripts/publish_dataset.sh
 #
 # What it does: creates (if missing) the public dataset repo <HF_USER>/<DATASET_NAME>, uploads
-# docs/v3/dataset_card.md as README.md and results/dashboard/lusc_atlas.duckdb, then prints the exact
+# docs/design/dataset_card.md as README.md and results/dashboard/lusc_atlas.duckdb, then prints the exact
 # Streamlit secrets TOML (repo, the upload's commit sha as revision, the file's sha256) to paste into
 # Community Cloud → Advanced settings → Secrets.
 #
-# Zero-cost guarantees (DEVELOPMENT_LOG §3.11, docs/v3/C_dashboard_hosting.md "Cost: $0"):
+# Zero-cost guarantees (DEVELOPMENT_LOG §3.11, docs/design/C_dashboard_hosting.md "Cost: $0"):
 #   * it NEVER creates a Space (HF Docker/Gradio Spaces need a paid plan) and never sets hardware;
 #   * the dataset is always public (public storage is free; private storage has a quota);
 #   * it refuses files over MAX_MB (default 1024) so a mistake can't push a multi-GB object;
@@ -26,7 +26,7 @@ source ../storage_env.sh 2>/dev/null || true
 DATASET_NAME=${DATASET_NAME:-lusc-atlas-db}
 MAX_MB=${MAX_MB:-1024}
 DB=results/dashboard/lusc_atlas.duckdb
-CARD=docs/v3/dataset_card.md
+CARD=docs/design/dataset_card.md
 YES=0; [[ "${1:-}" == "--yes" ]] && YES=1
 py() { pixi run -e dashboard python "$@"; }
 

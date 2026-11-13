@@ -85,7 +85,7 @@ def footer() -> None:
     st.divider()
     st.caption(
         f"Snapshot built {m.get('built_at', '?')} from commit `{sha}`{dirty} "
-        f"(branch `{m.get('git_branch', '?')}`), schema v{m.get('schema_version', '?')}. "
+        f"(branch `{m.get('git_branch', '?')}`), database schema {m.get('schema_version', '?')}. "
         "Every number is read from pipeline outputs. See the Provenance page."
     )
 

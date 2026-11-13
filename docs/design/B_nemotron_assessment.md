@@ -1,6 +1,6 @@
 # B · Does NVIDIA Nemotron make sense here?
 
-*Concept B of [docs/v3](README.md). Facts retrieved 2026-11-12 from NVIDIA model cards (huggingface.co/nvidia),
+*Concept B of [docs/design](README.md). Facts retrieved 2026-11-12 from NVIDIA model cards (huggingface.co/nvidia),
 research.nvidia.com, build.nvidia.com / docs.api.nvidia.com, NVIDIA GitHub, arXiv and the Anthropic pricing page.
 Benchmarks are **NVIDIA's own** unless a row says otherwise. **UNVERIFIED** = not confirmed on an official
 source; **ESTIMATE** = my reasoning, no source.*

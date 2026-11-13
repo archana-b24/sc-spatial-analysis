@@ -1,7 +1,7 @@
 """Read-only tools over the dashboard DuckDB — the only way the agent can see data.
 
 Guardrails (each one closes a failure mode seen in published agent evaluations, see
-docs/v3/A_agentic_research.md §3):
+docs/design/A_agentic_research.md §3):
 
 1. **Read-only at three levels.** The file is opened ``read_only=True``; external file/network access is
    disabled and the configuration locked (so ``read_csv('/etc/...')`` or ``ATTACH`` cannot escape the

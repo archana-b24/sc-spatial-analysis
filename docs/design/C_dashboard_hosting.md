@@ -1,6 +1,6 @@
 # C · A dashboard that explains the data, one source of truth, a public link
 
-*Concept C of [docs/v3](README.md). Written 2026-11-12; §3 and "Cost: $0" revised later that day for the
+*Concept C of [docs/design](README.md). Written 2026-11-12; §3 and "Cost: $0" revised later that day for the
 free-only deploy (fixes session, [FIXES_RUN2.md](FIXES_RUN2.md)). Hosting facts verified on the official docs (URLs
 inline).*
 
@@ -42,7 +42,7 @@ runtime reads anything else, and it is rebuilt from scratch by `export`, never e
 |---|---|---|
 | `test_app_reads_only_duckdb` | `tests/test_dashboard.py` | Fails if any `app/` file calls `read_csv`/`read_h5ad`/`yaml`/`open(`/`json.load`/`h5py`/`anndata` (two reviewed exceptions carry an explicit marker: decoding PNG bytes from the DB, and hashing the DB file) |
 | `SCHEMA_CONTRACT` + `schema_contract` table + `test_schema_contract` | `src/lusc_atlas/export.py`, tests | Lists the tables/columns the app and agent depend on; a pipeline change that renames one now fails loudly instead of breaking a page silently |
-| `meta`: `config_sha256`, `content_sha256`, `role`, schema v2 | export | Which config and which curated text produced this snapshot |
+| `meta`: `config_sha256`, `content_sha256`, `role`, schema 2 | export | Which config and which curated text produced this snapshot |
 | `step_stamps` table | export (from `logs/run_all/.done/*`) | Which pipeline steps had finished cleanly when the snapshot was built |
 | `page_guide`, `glossary` tables | export (from `docs/dashboard_content.yaml`) | Reader-guide text lives in the DB like everything else |
 | `LUSC_DB_SHA256` pin | `app/lib/db.py` | A deployed app refuses to serve a snapshot whose sha256 differs from the one it was built and tested with |
@@ -99,12 +99,12 @@ anything that page treats as large. Private storage (100 GB free) is not used.
 
 | File | Purpose |
 |---|---|
-| `scripts/publish_dataset.sh` (`pixi run -e dashboard publish-dataset`) | **You run it** (needs `HF_TOKEN`). Creates the *public* dataset if missing (refuses if it exists as private), uploads `docs/v3/dataset_card.md` as README and the DuckDB, then prints the secrets TOML to paste into Community Cloud (repo, upload commit sha, file sha256). **Never creates a Space**, never touches hardware, refuses files > 1 GB (`MAX_MB`), never prints the token. Not run here (rule: no uploads) |
+| `scripts/publish_dataset.sh` (`pixi run -e dashboard publish-dataset`) | **You run it** (needs `HF_TOKEN`). Creates the *public* dataset if missing (refuses if it exists as private), uploads `docs/design/dataset_card.md` as README and the DuckDB, then prints the secrets TOML to paste into Community Cloud (repo, upload commit sha, file sha256). **Never creates a Space**, never touches hardware, refuses files > 1 GB (`MAX_MB`), never prints the token. Not run here (rule: no uploads) |
 | `scripts/cloud_dry_run.sh` (`pixi run -e dashboard cloud-dry-run`) | **Local rehearsal, no upload, no account.** (1) copies exactly what git would push (tracked + untracked-not-ignored) to a clean directory, so the DB and `.pixi/` are absent; (2) fresh **Python 3.12** venv from `app/requirements.txt` only; (3) writes `.streamlit/secrets.toml` in the clone; (4) seeds an offline HF cache, so the app fetches the DB through the same `hf_hub_download` call as in production, then checks the pin; (5) renders every page with AppTest from the repo-root cwd and reports peak RSS vs 2.7 GB; (5b) **negative control**: a wrong sha256 must stop the app; (6) serves the clone on :8502 and checks `/_stcore/health` |
 | `app/lib/db.py` | `LUSC_DB`, `LUSC_DB_HF_REPO`, `LUSC_DB_HF_REVISION`, `LUSC_DB_SHA256` from env or `st.secrets` |
 | `app/requirements.txt` | 8 pins, exactly the pixi `dashboard` env versions (streamlit 1.67.0, duckdb 2.0.0, plotly 7.1.0, pandas 2.3.3, numpy 2.5.4, pyarrow 26.0.1, pillow 13.0.0, huggingface-hub 2.4.0). No LLM SDKs |
 | `.streamlit/config.toml` | Theme + headless; at the repo root where Community Cloud reads it |
-| `docs/v3/dataset_card.md` | README of the HF Dataset |
+| `docs/design/dataset_card.md` | README of the HF Dataset |
 
 **Rehearsal result (2026-11-12, run-1 DB):** 15/15 pages OK, DB resolved via secrets + `hf_hub_download` from the
 seeded cache, wrong sha256 refused, health OK, **peak RSS 444 MB**. Re-run after the run-2 export: see

@@ -105,7 +105,7 @@ def main(argv=None) -> int:
         if s:
             table.append((p, s))
     if not table:
-        print("No provider ran. Set ANTHROPIC_API_KEY and/or NVIDIA_API_KEY (see docs/v3/README.md).")
+        print("No provider ran. Set ANTHROPIC_API_KEY and/or NVIDIA_API_KEY (see docs/design/README.md).")
         return 2
     print("\n| provider | pass | value | grounded | caveats | calls/q | in tok | out tok |")
     print("|---|---|---|---|---|---|---|---|")

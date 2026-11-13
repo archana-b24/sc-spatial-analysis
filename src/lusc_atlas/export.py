@@ -1,7 +1,7 @@
 """Build the dashboard's serving snapshot: pipeline outputs → one read-only DuckDB file.
 
-Design (docs/ROADMAP_v2.1.md §6):
-* Two layers of "source of truth", each with one job (wording reconciled 2026-11-12, docs/v3/README.md):
+Design (docs/ROADMAP.md §6):
+* Two layers of "source of truth", each with one job (wording reconciled 2026-11-12, docs/design/README.md):
     - computational source of truth = `results/tables/*.csv` and the `.h5ad`/`.zarr` objects, reproducible
       from code + config. Analyses read and write these.
     - serving source of truth = this DuckDB file. The dashboard and the MCP server
@@ -40,7 +40,7 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3  # v3 (run 2, §3.11): + cells.de_group, c2l_reference_labels, milo design cols; niches open
+SCHEMA_VERSION = 3  # run 2, §3.11: + cells.de_group, c2l_reference_labels, milo design cols; niches open
 # v2 (2026-11-12): + page_guide, glossary, step_stamps, schema_contract, meta provenance
 
 # CSVs loaded 1:1 (table name = file stem). Anything not listed here is not shipped.

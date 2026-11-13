@@ -31,6 +31,6 @@ figures/
 results/dashboard/
 .streamlit/secrets.toml
 
-# --- v3: generated Space bundle and local agent-eval outputs ---
+# --- generated Space bundle and local agent-eval outputs ---
 build/
 logs/agent_eval/

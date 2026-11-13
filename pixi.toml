@@ -94,7 +94,7 @@ pyyaml = "*"
 
 
 # --------------------------------------------------------------- dashboard env
-# Results dashboard (docs/ROADMAP_v2.1.md §6): the `export` step (pipeline outputs → DuckDB) and the
+# Results dashboard (docs/ROADMAP.md §6): the `export` step (pipeline outputs → DuckDB) and the
 # Streamlit app. Kept separate so web dependencies never touch the analysis lock; app/requirements.txt
 # mirrors the app-only subset for Hugging Face Spaces.
 [feature.dashboard.dependencies]
@@ -114,7 +114,7 @@ streamlit = ">=1.40"
 plotly = ">=5.24"
 pillow = "*"
 pytest = "*"
-# v3 agent (docs/v3/A_agentic_research.md): optional LLM providers + MCP server. Imported lazily, so the
+# agent (docs/design/A_agentic_research.md): optional LLM providers + MCP server. Imported lazily, so the
 # dashboard runs without them and without any API key.
 anthropic = "*"   # Claude (default provider)
 openai = "*"      # OpenAI-compatible client → NVIDIA NIM / build.nvidia.com (Nemotron)
@@ -140,8 +140,8 @@ smk-dry = "snakemake -s workflow/Snakefile -n"
 [feature.dashboard.tasks]
 export = "lusc-atlas export"
 app = "streamlit run app/streamlit_app.py --server.headless true --server.port 8501"
-# v3 (docs/v3/README.md)
+# agent / MCP (docs/design/README.md)
 mcp = "python -m lusc_atlas.agent.mcp_server"             # MCP stdio server over the same read-only tools
-# free hosting only (docs/v3/C_dashboard_hosting.md "Cost: $0"): Streamlit Community Cloud + public HF Dataset
+# free hosting only (docs/design/C_dashboard_hosting.md "Cost: $0"): Streamlit Community Cloud + public HF Dataset
 cloud-dry-run = "bash scripts/cloud_dry_run.sh"           # clean clone + fresh py3.12 venv + secrets + offline HF fetch
 publish-dataset = "bash scripts/publish_dataset.sh"       # YOU run it: DB → public HF Dataset (needs HF_TOKEN; never a Space)

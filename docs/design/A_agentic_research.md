@@ -1,6 +1,6 @@
 # A · Making the atlas agentic: research, design, prototype
 
-*Concept A of [docs/v3](README.md). Written 2026-11-12. Literature checked with web search/fetch that day; every
+*Concept A of [docs/design](README.md). Written 2026-11-12. Literature checked with web search/fetch that day; every
 citation lists its ID/URL, and anything confirmed only from a secondary source is marked **(sec.)**, anything not
 confirmed **UNVERIFIED**.*
 

@@ -1,7 +1,7 @@
-"""v3 "Ask the atlas" agent: an LLM that answers questions about the LUSC atlas ONLY through read-only
+"""The "Ask the atlas" agent: an LLM that answers questions about the LUSC atlas ONLY through read-only
 tools over the dashboard DuckDB, and returns every SQL statement and table it used as provenance.
 
-Layout (design and rationale: docs/v3/A_agentic_research.md):
+Layout (design and rationale: docs/design/A_agentic_research.md):
 
 * ``tools``  - the tool layer: schema listing, guarded read-only SQL, and curated semantic tools. Pure
                DuckDB + pandas; no LLM dependency, so the same functions back the agent, the MCP server

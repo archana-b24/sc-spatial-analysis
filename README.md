@@ -54,18 +54,18 @@ diverge. Each step can also be run directly: `pixi run lusc-atlas <step>` (`pixi
 `data/processed/*.h5ad`, `data/processed/visium.spatialdata.zarr`, per-step provenance in
 `results/reports/provenance/`.
 
-### Results dashboard (v2.1, in progress)
+### Results dashboard
 
 An interactive Streamlit site with one page per pipeline stage. Each page pairs the decision with the evidence
 behind it and shows the known caveats. It reads a DuckDB snapshot that the `export` step derives from pipeline
-outputs (design: `docs/ROADMAP_v2.1.md` §6).
+outputs (design: `docs/ROADMAP.md` §6).
 
 ```bash
 pixi run -e dashboard export      # pipeline outputs → results/dashboard/lusc_atlas.duckdb (~1 min)
 pixi run -e dashboard app         # http://localhost:8501
 ```
 
-v3 preview (prototypes, `docs/v3/README.md`): a *Start here* guide and computed reader guide on every page, plus the
+Also included (design notes in `docs/design/README.md`): a *Start here* guide and computed reader guide on every page, plus the
 atlas's read-only DuckDB tools exposed as an MCP server. (The in-app chatbot is parked: the project stays free to
 host and run, and a chatbot needs a paid LLM API key.)
 
@@ -77,7 +77,7 @@ pixi run -e dashboard cloud-dry-run                                        # reh
 Hosting is free-only: the app on **Streamlit Community Cloud** (deployed from this public repo, entrypoint
 `app/streamlit_app.py`, deps `app/requirements.txt`) and the DuckDB as a **public Hugging Face Dataset**
 (`scripts/publish_dataset.sh`, sha256-pinned at app start). Every service used, its free tier and what would
-trigger a cost: `docs/v3/C_dashboard_hosting.md` → *Cost: $0*.
+trigger a cost: `docs/design/C_dashboard_hosting.md` → *Cost: $0*.
 
 ## Data
 
@@ -116,7 +116,7 @@ committed; regenerate with `pixi run lusc-atlas report`). Interpretation and cav
 **Known issues** ([§3.10](DEVELOPMENT_LOG.md#310--post-run-review--open-issues-2026-11-11)): run 1's three
 high-severity issues (Milo contrast, tumour cells hidden in `Unknown`, a 66-cell rare-epithelial cell2location
 reference) are fixed in run 2; before/after in [DEVELOPMENT_LOG §3.11](DEVELOPMENT_LOG.md) and
-[docs/v3/FIXES_RUN2.md](docs/v3/FIXES_RUN2.md). Still open and documented: tensor factors don't separate tumour
+[docs/design/FIXES_RUN2.md](docs/design/FIXES_RUN2.md). Still open and documented: tensor factors don't separate tumour
 from adjacent tissue, SOLO and Scrublet disagree, and cross-atlas mixing is below random within cell types.
 
 ## Repository layout

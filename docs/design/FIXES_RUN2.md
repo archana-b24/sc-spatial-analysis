@@ -35,7 +35,7 @@ record is [DEVELOPMENT_LOG §1.3](../../DEVELOPMENT_LOG.md) (hosting) and §3.11
 - No LLM API is called by the site or the pipeline: `anthropic`/`openai` are not in `app/requirements.txt`, and the
   chatbot was removed earlier. `agent-eval` was never run live; `--check` needs no LLM.
 - No cloud compute was used; everything ran on this VM.
-- Old open questions in `docs/v3/README.md` and `B_nemotron_assessment.md` that suggested paid API spend or HF PRO
+- Old open questions in `docs/design/README.md` and `B_nemotron_assessment.md` that suggested paid API spend or HF PRO
   are struck through and marked superseded (kept for the record).
 
 Free-tier limits relied on (verified 2026-11-12 on the providers' docs):
@@ -113,8 +113,8 @@ The site you deployed during this session runs the **run-1** snapshot from the `
 `v2-dev`, which holds the dashboard and free-deploy scripts but none of the §3.10 fix code). To move it to run 2:
 
 1. Bring this branch's changes onto `v2-dev`. Expect small overlaps in `app/lib/db.py`, `scripts/cloud_dry_run.sh`,
-   `README.md`, `docs/v3/README.md` and `docs/v3/C_dashboard_hosting.md`; the versions here are the newer ones.
-   Schema v3 adds `cells.de_group`, `c2l_reference_labels` and new Milo/scCODA columns, so the app code and the DB
+   `README.md`, `docs/design/README.md` and `docs/design/C_dashboard_hosting.md`; the versions here are the newer ones.
+   Database schema 3 adds `cells.de_group`, `c2l_reference_labels` and new Milo/scCODA columns, so the app code and the DB
    must move together.
 2. Copy `results/dashboard/lusc_atlas.duckdb` (run 2, 120 MB) into the worktree and run `cloud-dry-run` there.
 3. Run `publish-dataset` again. It prints a new revision and sha256; paste both into the app's Secrets. The sha
@@ -123,7 +123,7 @@ The site you deployed during this session runs the **run-1** snapshot from the `
 ## 5. Honest limitations (still open)
 
 - **#4:** the tensor factors describe sample-level programmes, not tumour-specific ones. A study-adjusted test of the
-  loadings is a v2.1 item.
+  loadings is a follow-up item.
 - **#5 (SOLO vs Scrublet) and #6 (atlas mixing):** documented, not changed.
 - **Spot-level CNV-low vs Malignant:** the split within a spot is not reliable (their signatures overlap); quote the
   two together as tumour epithelium.
@@ -141,15 +141,15 @@ The site you deployed during this session runs the **run-1** snapshot from the `
    DuckDB snapshot. The snapshot is derived from CELLxGENE (HLCA, LuCA: CC BY 4.0) and 10x Genomics data, so check
    the 10x dataset terms before publishing.
 2. **Commit split.** Suggested three commits:
-   - (a) v2.1 dashboard;
-   - (b) v3 concepts (agent library, docs/v3 A–C);
+   - (a) dashboard;
+   - (b) agent concepts (agent library, docs/design A–C);
    - (c) this fixes session (free-only deploy + run-2 fixes, tests, docs).
 
    Nothing is committed. Generated results stay git-ignored.
 3. **Concept 4 (Claude Skill).** Not started. It works through Claude Code at no extra cost when you want it.
 4. **scCODA reference.** I used `cDC` instead of the suggested Fibroblast / EC capillary (data in §2). Optional
    sensitivity check: rerun scCODA with `Macrophage` as the reference (about 1 h, `abundance` step only).
-5. **Trajectory.** Add the CNV-low group as a second endpoint (v2.1 option), or keep it CNV-confirmed only?
+5. **Trajectory.** Add the CNV-low group as a second endpoint (follow-up option), or keep it CNV-confirmed only?
 6. **Adjacent-normal author-malignant cells (64).** Keep them as `Unknown` (current choice) or drop them?
 
 ## Files touched in this session
@@ -157,7 +157,7 @@ The site you deployed during this session runs the **run-1** snapshot from the `
 - **Added:**
   - `scripts/publish_dataset.sh`, `scripts/cloud_dry_run.sh`, `.streamlit/config.toml` (moved);
   - `tests/test_fixes_run2.py`;
-  - `docs/v3/FIXES_RUN2.md`.
+  - `docs/design/FIXES_RUN2.md`.
 - **Changed:**
   - `config/config.yaml`;
   - `src/lusc_atlas/{de,deconvolve,steps,report,export}.py`, `src/lusc_atlas/agent/{__init__,tools}.py`;
@@ -165,8 +165,8 @@ The site you deployed during this session runs the **run-1** snapshot from the `
   - `scripts/smoke_test.py`, `tests/test_dashboard.py`, `tests/agent_eval/questions.yaml`;
   - `pixi.toml` (tasks only; `pixi.lock` unchanged, backup in `../.tooling/`), `app/requirements.txt` (header only);
   - `.gitignore` (`logs/smoke/`);
-  - `README.md`, `DEVELOPMENT_LOG.md`, `docs/dashboard_content.yaml`, `docs/ROADMAP_v2.1.md`;
-  - `docs/v3/{README,A_agentic_research,B_nemotron_assessment,C_dashboard_hosting,dataset_card}.md`.
+  - `README.md`, `DEVELOPMENT_LOG.md`, `docs/dashboard_content.yaml`, `docs/ROADMAP.md`;
+  - `docs/design/{README,A_agentic_research,B_nemotron_assessment,C_dashboard_hosting,dataset_card}.md`.
 - **Parked (outside the repo):** `../.tooling/parked_paid_deploy_2026-11-12/`.
 - **Archived (git-ignored):** `results/_archive_run1_2026-11-10/`, holding run 1's tables, reports, figures, DuckDB,
   stamps and log.

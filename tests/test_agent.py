@@ -1,4 +1,4 @@
-"""v3 agent: tool guardrails, the tool-use loop (fake LLM), provider adapters (mocked SDK clients, never
+"""Agent: tool guardrails, the tool-use loop (fake LLM), provider adapters (mocked SDK clients, never
 the network), grounding check, eval-set integrity and the MCP server.
 
 Needs the `dashboard` pixi env and a built DB; skipped otherwise (the default-env CI job is unaffected).

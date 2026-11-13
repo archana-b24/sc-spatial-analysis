@@ -252,7 +252,7 @@ ccc:
   spatial_bandwidth: 200
 
 # -----------------------------------------------------------------------------
-# Dashboard serving snapshot (step `export`, docs/ROADMAP_v2.1.md §6) — presentation only, no analysis
+# Dashboard serving snapshot (step `export`, docs/ROADMAP.md §6) — presentation only, no analysis
 # -----------------------------------------------------------------------------
 dashboard:
   subsample_cells: 50000          # cells with per-cell marker expression (UMAP gene colouring); metadata kept for all

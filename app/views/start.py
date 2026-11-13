@@ -88,7 +88,7 @@ st.code(
     "   ORDER BY padj LIMIT 10;",
     language="sql",
 )
-st.caption("Download links and local setup are in the repository's docs/v3/C_dashboard_hosting.md.")
+st.caption("Download links and local setup are in the repository's docs/design/C_dashboard_hosting.md.")
 cols = st.columns(3)
 cols[0].page_link("views/glossary.py", label="Glossary", icon="📚")
 cols[1].page_link("views/issues.py", label="Caveats & limitations", icon="⚠️")

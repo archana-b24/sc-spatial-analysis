@@ -31,7 +31,7 @@ from typing import Any
 DEFAULT_MODELS = {
     "anthropic": "claude-opus-5-5",
     # Nemotron 3 Super (120B-A12B hybrid Mamba-Transformer MoE, tool calling) on build.nvidia.com;
-    # see docs/v3/B_nemotron_assessment.md for the alternatives and why this one
+    # see docs/design/B_nemotron_assessment.md for the alternatives and why this one
     "nvidia": "nvidia/nemotron-3-super-120b-a12b",
     "fake": "fake-scripted",
 }

@@ -1,4 +1,4 @@
-# "Ask the atlas" evaluation set (docs/v3/A_agentic_research.md §6).
+# "Ask the atlas" evaluation set (docs/design/A_agentic_research.md §6).
 #
 # Ground truth is NEVER typed in here: each item carries `truth_sql`, which the runner executes against the
 # same DuckDB snapshot the agent sees, so the answers move with the data when the pipeline is rerun (e.g.

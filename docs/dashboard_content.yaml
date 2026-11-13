@@ -141,8 +141,8 @@ known_issues:
     status: documented
     log_ref: "§3.9"
 
-# ------------------------------------------------------------------------------------------------- v3
-# Reader guide (v3, 2026-11-12; docs/v3/C_dashboard_hosting.md). Loaded by `export` into `page_guide` and
+# ------------------------------------------------------------------------------------------------- reader guide
+# Reader guide (2026-11-12; docs/design/C_dashboard_hosting.md). Loaded by `export` into `page_guide` and
 # `glossary`. Only the static parts live here: "what you're looking at" and "how to read it". The "what it
 # means" sentences are computed from the database when the page renders (app/lib/explain.py), so they can
 # never disagree with the numbers on the page.

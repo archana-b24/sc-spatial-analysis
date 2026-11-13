@@ -62,7 +62,7 @@ INPUTS = {
         "data/processed/visium.h5ad",
     ],
     "report": [o for k, v in OUTPUTS.items() if k not in ("report", "export") for o in v],
-    # dashboard snapshot (ROADMAP_v2.1 §6): reads tables + processed objects, never feeds back into analysis.
+    # dashboard snapshot (ROADMAP §6): reads tables + processed objects, never feeds back into analysis.
     # docs/dashboard_content.yaml is a tracked source file (like config.yaml), so it is not a declared input.
     "export": [
         "results/reports/summary.md",

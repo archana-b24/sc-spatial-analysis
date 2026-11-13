@@ -3,9 +3,9 @@
     pixi run -e dashboard app            # local, reads results/dashboard/lusc_atlas.duckdb
 
 One page per pipeline stage; each answers question → decision → evidence → caveats
-(docs/ROADMAP_v2.1.md §6), with a reader guide (what / how to read / what it means / caveats; v3,
-docs/v3/README.md). The app is read-only: the DuckDB snapshot that `lusc-atlas export` builds from pipeline
-outputs is its single serving source of truth.
+(docs/ROADMAP.md §6), with a reader guide (what / how to read / what it means / caveats;
+docs/design/README.md). The app is read-only: the DuckDB snapshot that `lusc-atlas export` builds from
+pipeline outputs is its single serving source of truth.
 """
 
 import sys
