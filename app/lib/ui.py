@@ -70,10 +70,10 @@ def caveats(stage: str) -> None:
     df = q("SELECT * FROM known_issues WHERE stage = ? ORDER BY id", (stage,))
     for r in df.itertuples():
         icon = SEVERITY_ICON.get(r.severity, "⚠️")
-        head = f"{icon} **Known issue ({r.severity}, {r.status}): {r.title}.**"
+        head = f"{icon} **Caveat ({r.severity}): {r.title}.**"
         body = f"{head} {r.detail} *(DEVELOPMENT_LOG {r.log_ref})*"
         if str(r.status).startswith("resolved"):
-            st.success(f"✅ **Resolved ({r.status}): {r.title}.** {r.detail} *(DEVELOPMENT_LOG {r.log_ref})*")
+            st.caption(f"✅ Fixed in run 2: {r.title} (issue {r.id}, DEVELOPMENT_LOG {r.log_ref}).")
         else:
             (st.warning if r.severity == "high" else st.info)(body)
 

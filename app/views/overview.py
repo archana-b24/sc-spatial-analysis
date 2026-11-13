@@ -39,7 +39,7 @@ if open_issues:
     st.warning(
         f"**{open_issues} open issues** change how some results should be read. They are flagged on each page."
     )
-    st.page_link("views/issues.py", label="See all known issues", icon="⚠️")
+    st.page_link("views/issues.py", label="See all caveats & limitations", icon="⚠️")
 
 c1, c2 = st.columns([3, 2])
 with c1:

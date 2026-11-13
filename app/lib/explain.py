@@ -279,12 +279,17 @@ def guide(stage: str, expanded: bool = True) -> None:
                 st.markdown("**What it means** *(computed from the data on this page)*")
                 st.markdown("\n".join(f"- {s}" for s in f))
             if not issues.empty:
-                st.markdown("**Caveats**")
-                st.markdown(
-                    "\n".join(
-                        f"- {SEV.get(r.severity, '⚠️')} Issue {r.id} ({r.status}): {r.title}"
-                        for r in issues.itertuples()
+                done = issues["status"].astype(str).str.startswith("resolved")
+                if (~done).any():
+                    st.markdown("**Caveats**")
+                    st.markdown(
+                        "\n".join(
+                            f"- {SEV.get(r.severity, '⚠️')} Issue {r.id}: {r.title}"
+                            for r in issues[~done].itertuples()
+                        )
                     )
-                )
-                st.page_link("views/issues.py", label="All known issues", icon="⚠️")
+                if done.any():
+                    ids = ", ".join(str(i) for i in issues[done]["id"])
+                    st.caption(f"Fixed in run 2: issue {ids} (details on the Caveats & limitations page).")
+                st.page_link("views/issues.py", label="All caveats & limitations", icon="⚠️")
         st.caption("Unfamiliar term? See the glossary.")

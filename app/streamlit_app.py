@@ -27,7 +27,7 @@ pages = {
     "Start here": [
         st.Page(f"{V}/start.py", title="Start here", icon="🧭", default=True),
         st.Page(f"{V}/overview.py", title="Overview", icon="🏠"),
-        st.Page(f"{V}/issues.py", title="Known issues", icon="⚠️"),
+        st.Page(f"{V}/issues.py", title="Caveats & limitations", icon="⚠️", url_path="issues"),
         st.Page(f"{V}/glossary.py", title="Glossary", icon="📚"),
     ],
     "Pipeline stages": [
