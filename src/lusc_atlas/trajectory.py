@@ -18,6 +18,7 @@ import logging
 
 import anndata as ad
 import numpy as np
+import pandas as pd
 import scanpy as sc
 
 log = logging.getLogger(__name__)
@@ -77,9 +78,46 @@ def run_trajectory(sub: ad.AnnData, tcfg: dict, seed: int = 0) -> dict:
     except Exception as exc:  # noqa: BLE001 — fate probs need ≥1 terminal state; report and continue
         log.warning("fate probabilities not computed: %s", exc)
     del sub.layers["imputed"]
+    sens = latent_sensitivity(sub, root, tcfg, seed)
     return {
+        **sens,
         "root": root,
         "terminal_states": list(map(str, g.terminal_states.cat.categories))
         if g.terminal_states is not None
         else [],
     }
+
+
+def latent_sensitivity(sub: ad.AnnData, root: str, tcfg: dict, seed: int = 0, alt: str = "X_scVI") -> dict:
+    """§3.12: is the pseudotime ordering a property of the data or of the chosen embedding? The default
+    embedding (scANVI) is label-guided (`Basal` is a training label); recompute Palantir on the label-free
+    scVI latent
+    from the
+    same root and report the Spearman correlation of the two pseudotimes."""
+    import palantir
+    from scipy.stats import spearmanr
+
+    if alt not in sub.obsm or alt == sub.uns.get("integration", {}).get("chosen"):
+        return {"sensitivity_embedding": None}
+    tmp = ad.AnnData(obs=sub.obs[[]].copy(), obsm={"X_alt": np.asarray(sub.obsm[alt])})
+    palantir.utils.run_diffusion_maps(tmp, pca_key="X_alt", n_components=tcfg["n_components"], seed=seed)
+    palantir.utils.determine_multiscale_space(tmp)
+    palantir.core.run_palantir(tmp, root, num_waypoints=tcfg["num_waypoints"], seed=seed)
+    pt = tmp.obs["palantir_pseudotime"]
+    sub.obs["pseudotime_" + alt.removeprefix("X_")] = pt.values
+    rho = spearmanr(sub.obs["palantir_pseudotime"], pt).statistic
+    log.info("pseudotime sensitivity: Spearman rho %.3f (%s vs default embedding)", rho, alt)
+    return {"sensitivity_embedding": alt, "sensitivity_spearman": float(rho)}
+
+
+def per_donor_summary(sub: ad.AnnData) -> pd.DataFrame:
+    """Pseudotime per donor × state (§3.12): the unit is the patient, not the cell — a state supported by
+    one or two patients is visible as such."""
+
+    cols = [c for c in ["lineage_state", "donor_id", "study", "atlas", "condition"] if c in sub.obs]
+    return (
+        sub.obs.groupby(cols, observed=True)["palantir_pseudotime"]
+        .agg(n_cells="size", median_pseudotime="median")
+        .reset_index()
+        .query("n_cells > 0")
+    )

@@ -26,6 +26,7 @@ def test_steps_registry_matches_order():
 
 # ------------------------------------------------------------------ QC
 def test_mad_outlier_flags_extremes_only():
+    pytest.importorskip("scanpy")  # pipeline env only
     from lusc_atlas.qc import _mad_outlier
 
     x = pd.Series(np.r_[np.random.default_rng(0).normal(10, 1, 500), [100.0, -80.0]])
@@ -36,6 +37,7 @@ def test_mad_outlier_flags_extremes_only():
 
 def test_qc_is_per_sample():
     """A shallow sample must not be wiped out by a deep sample's distribution (v1 used global cutoffs)."""
+    pytest.importorskip("scanpy")  # pipeline env only
     import anndata as ad
 
     from lusc_atlas.qc import flag_outliers
@@ -80,6 +82,7 @@ def test_design_adds_study_only_when_not_collinear():
 
 # ------------------------------------------------------------------ integration guard
 def test_knn_purity_detects_overcorrection():
+    pytest.importorskip("scanpy")  # pipeline env only
     from lusc_atlas.integrate import knn_label_purity
 
     rng = np.random.default_rng(0)
@@ -91,6 +94,7 @@ def test_knn_purity_detects_overcorrection():
 
 
 def test_choose_rejects_methods_that_fail_the_guard():
+    pytest.importorskip("scanpy")  # pipeline env only
     from lusc_atlas.integrate import choose
 
     scores = pd.DataFrame(

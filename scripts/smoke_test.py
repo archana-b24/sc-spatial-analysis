@@ -5,10 +5,10 @@ Purpose: catch API/shape errors in minutes before a multi-hour full run. Writes 
 results/ — everything goes to $TMPDIR/lusc_smoke. Not a scientific result.
 
     pixi run python scripts/smoke_test.py [--n 6000] [--with-fm]
-    pixi run python scripts/smoke_test.py --run2            # §3.10 fixes: de_group split → DE → scCODA → Milo
     pixi run -e c2l python scripts/smoke_test.py --c2l      # §3.10 #3: reference labels → c2l (tiny epochs)
+    pixi run python scripts/smoke_test.py --run3            # §3.12: CNV → DE robustness → composition → CCC
 
-`--run2` / `--c2l` start from a subsample of the existing `data/processed/sc_annotated.h5ad` (whole
+`--run3` / `--c2l` start from a subsample of the existing `data/processed/sc_annotated.h5ad` (whole
 tumour/adjacent samples of paired donors + healthy samples) because the upstream steps did not change.
 """
 
@@ -34,8 +34,10 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=12000)
     ap.add_argument("--with-fm", action="store_true", help="also run Geneformer on 64 cells")
     g = ap.add_mutually_exclusive_group()
-    g.add_argument("--run2", action="store_true", help="only the steps changed for the §3.10 fixes")
     g.add_argument("--c2l", action="store_true", help="cell2location reference prep + tiny fit (c2l env)")
+    g.add_argument(
+        "--run3", action="store_true", help="§3.12 overhaul: CNV → DE robustness → composition → CCC"
+    )
     a = ap.parse_args()
     setup_logging()
     cfg = copy.deepcopy(load_config())
@@ -43,9 +45,9 @@ def main() -> None:
     repo = Path(cfg["_repo_root"])
     out = Path(os.environ.get("TMPDIR", "/tmp")) / "lusc_smoke"
     out.mkdir(parents=True, exist_ok=True)
-    if a.run2 or a.c2l:
+    if a.c2l or a.run3:
         sub = annotated_subsample(repo, a.n)
-        (smoke_c2l if a.c2l else smoke_run2)(cfg, repo, sub)
+        (smoke_c2l if a.c2l else smoke_run3)(cfg, repo, sub)
         return
 
     # tiny settings
@@ -187,62 +189,91 @@ def annotated_subsample(repo: Path, n: int) -> ad.AnnData:
     return sub
 
 
-def smoke_run2(cfg: dict, repo: Path, adata: ad.AnnData) -> None:
+def smoke_run3(cfg: dict, repo: Path, adata: ad.AnnData) -> None:
+    """§3.12 overhaul on a real annotated subsample: per-sample CNV, DE with study-grounded robustness, paired
+    composition, Milo on donor × tissue units, trajectory sensitivity, paired tensor (fixed small rank)."""
     import pandas as pd
 
-    from lusc_atlas.de import (
-        composition_sccoda,
-        make_de_groups,
-        milo_da,
-        pathway_activities,
-        pseudobulk,
-        run_contrast,
-        tumour_epithelium_vs_healthy_basal,
-    )
+    from lusc_atlas import de as D
+    from lusc_atlas.ccc import by_sample, paired_loading_test, paired_units, tensor_c2c
+    from lusc_atlas.cnv import annotate_positions, gene_positions_from_gtf, run_infercnv
 
     t = time.time()
+    for c in ["malignant", "cnv_score", "de_group", "analysis_group"]:
+        if c in adata.obs:
+            del adata.obs[c]
+    pos = gene_positions_from_gtf(
+        cfg["data"]["gene_positions"]["url"], repo / "data/raw/gencode.v44.basic.annotation.gtf.gz"
+    )
+    annotate_positions(adata, pos)
+    cc = dict(cfg["cnv"], mask_max_cells=1500, min_epithelial=30, min_reference=50)
+    tabs = run_infercnv(adata, cc, 16, 0)
+    log.info(
+        "CNV ok:\n%s\nper sample:\n%s", tabs["summary"].to_string(), tabs["per_sample"].head(20).to_string()
+    )
     c = cfg["cnv"]
-    make_de_groups(
+    D.make_de_groups(
         adata,
         cfg["integration"]["harmonised_label_key"],
         cnv_low_label=c["cnv_low_label"],
         author_label=c["author_label_check"],
         tumour_conditions=c["tumour_conditions"],
+        refine=cfg["de"]["refine_groups"],
     )
-    vc = adata.obs["de_group"].value_counts()
-    log.info("de_group: %s", vc.to_dict())
-    assert vc.get(c["cnv_low_label"], 0) > 0, "no CNV-low tumour cells in the subsample"
-    cfg["de"]["min_samples_per_condition"] = 2
-    pdata = pseudobulk(adata, cfg["de"])
-    res = [run_contrast(pdata, cfg["de"], k, v, 8) for k, v in cfg["de"]["contrasts"].items()]
-    for name, grp in cfg["de"]["vs_healthy_basal"].items():
-        res.append(tumour_epithelium_vs_healthy_basal(pdata, cfg["de"], grp, "Basal", name, 8))
-    allres = pd.concat([r for r in res if not r.empty], ignore_index=True)
-    tested = allres.groupby("contrast").group.unique().to_dict()
-    log.info("DE ok: %d rows; groups %s", len(allres), {k: sorted(v) for k, v in tested.items()})
-    for k in cfg["de"]["contrasts"]:
-        bad = set(tested.get(k, [])) & set(cfg["de"]["tumour_only_groups"])
-        assert not bad, f"tumour-only group(s) {bad} tested in {k}"
-    pw = pathway_activities(allres, cfg["de"]["pathways"])
-    log.info("pathways ok: %s", {k: v.shape for k, v in pw.items()})
-
-    ref = cfg["abundance"]["sccoda_reference"]
-    eff = composition_sccoda(
-        adata, "de_group", "sample", "condition", 0, ref, num_samples=300, num_warmup=100
-    )
-    log.info("scCODA ok (reference %s): %d rows\n%s", ref, len(eff), eff.head().to_string())
-    milo = milo_da(adata, cfg["abundance"], "sample", "condition", 0)
+    log.info("de_group: %s", adata.obs["de_group"].value_counts().to_dict())
+    dcfg = dict(cfg["de"], min_paired_donors=4, min_paired_studies=2, min_descriptive_donors=2)
+    D.add_pseudobulk_unit(adata, dcfg["pseudobulk_sample_key"])
+    pdata = D.pseudobulk(adata, dcfg)
+    spec = dcfg["contrasts"]["paired_tumour_vs_adjacent"]
+    r = D.run_contrast(pdata, dcfg, "paired_tumour_vs_adjacent", spec, 8)
+    assert len(r), "paired DE produced nothing"
+    assert {"padj_thr", "ci_low", "padj_global", "tier", "inference"} <= set(r.columns)
+    loso, per, summ = D.paired_robustness(pdata, dcfg, "paired_tumour_vs_adjacent", spec, r, 8)
+    r = r.merge(summ, on=["gene", "group"], how="left")
+    amb = D.ambient_flags(pdata, r, dcfg)
     log.info(
-        "Milo ok: %d nhoods, design %s, contrast %s, %d samples / %d donors, %d with SpatialFDR < 0.1",
-        len(milo),
-        milo.design.iloc[0],
-        milo.contrast.iloc[0],
-        milo.n_samples.iloc[0],
-        milo.n_donors.iloc[0],
-        int((milo.SpatialFDR < 0.1).sum()),
+        "DE paired ok: %d rows, groups %s; robust %d; LOSO %d rows; per-study %d rows; ambient suspects %d",
+        len(r),
+        sorted(r.group.unique()),
+        int(r.robust.fillna(False).sum()),
+        len(loso),
+        len(per),
+        int(amb.ambient_suspect.sum()) if len(amb) else 0,
     )
-    assert milo["logFC"].notna().any(), "Milo produced no fold changes"
-    log.info("SMOKE TEST (run2) PASSED in %.0fs", time.time() - t)
+    log.info(
+        "power:\n%s", D.power_table(r, r.groupby("group")["n_donors"].first().to_dict()).head().to_string()
+    )
+    log.info("sex check:\n%s", D.sex_check(pdata, dcfg["condition_key"]).head().to_string())
+    log.info("cross-study null:\n%s", D.cross_study_null(pdata, dcfg, 8).to_string())
+    ex = D.run_contrast(pdata, dcfg, "tumour_vs_healthy", dcfg["contrasts"]["tumour_vs_healthy"], 8)
+    if len(ex):
+        ex["supported_by_paired"] = D.supported_by_paired(ex, r, dcfg["alpha"])
+    acfg = cfg["abundance"]
+    cnt = D.composition_counts(adata.obs, acfg, acfg["group_key"], "donor_condition")
+    comp = pd.concat(
+        [
+            D.composition_paired(cnt, {**acfg, **t_, "min_compartment_cells": 50})
+            for t_ in acfg["paired_tests"]
+        ],
+        ignore_index=True,
+    )
+    log.info("composition ok:\n%s", comp[["cell_type", "glm_log2fc", "glm_padj", "consistent"]].to_string())
+    milo = D.milo_da(adata, acfg, "donor_condition", "tissue_type", 0)
+    log.info(
+        "Milo ok: %d nhoods, %d units, %d donors", len(milo), milo.n_samples.iloc[0], milo.n_donors.iloc[0]
+    )
+    ccfg = dict(cfg["ccc"], tensor_rank=3, tensor_type_presence=0.6, tensor_outer_fraction=0.5)
+    adata.X = adata.layers["lognorm"]
+    unit = paired_units(adata.obs, "tumour", "adjacent_normal")
+    sub = adata[unit.notna().to_numpy()].copy()
+    sub.obs["donor_condition"] = unit.dropna().astype(str).astype("category").to_numpy()
+    ures = by_sample(sub, ccfg, "donor_condition", 16)
+    try:
+        fac = tensor_c2c(sub, ures, "donor_condition", ccfg, 0)
+        log.info("tensor ok; paired loading test:\n%s", paired_loading_test(fac, "tumour", "adjacent_normal"))
+    except ValueError as exc:  # subsample may be too small for a non-degenerate tensor
+        log.warning("tensor skipped on the smoke subsample: %s", exc)
+    log.info("SMOKE TEST (run3) PASSED in %.0fs", time.time() - t)
 
 
 def smoke_c2l(cfg: dict, repo: Path, ref: ad.AnnData) -> None:
@@ -269,8 +300,9 @@ def smoke_c2l(cfg: dict, repo: Path, ref: ad.AnnData) -> None:
     sig = reference_signatures(ref, {**cc, "reference_label": "c2l_label"}, 0)
     vis = ad.read_h5ad(repo / "data/interim/visium_qc.h5ad")
     vis = vis[np.random.default_rng(0).choice(vis.n_obs, 300, replace=False)].copy()
-    ab = map_spots(vis, sig, cc, 0)
+    ab, q05, props = map_spots(vis, sig, cc, 0)
     assert set(ab.columns) == set(sig.columns) and "Unknown" not in ab.columns
+    assert props is not None and np.allclose(props.sum(axis=1), 1, atol=1e-4), "posterior proportions failed"
     log.info("c2l ok: %s; cell types %s", ab.shape, list(ab.columns))
     log.info("SMOKE TEST (c2l) PASSED in %.0fs", time.time() - t)
 

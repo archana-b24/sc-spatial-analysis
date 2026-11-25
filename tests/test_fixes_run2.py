@@ -82,8 +82,8 @@ def test_config_declares_cnv_low_group_tumour_only():
     label = cfg["cnv"]["cnv_low_label"]
     assert label in cfg["de"]["tumour_only_groups"] and "Malignant" in cfg["de"]["tumour_only_groups"]
     assert label in cfg["de"]["vs_healthy_basal"].values()
-    # scCODA reference is explicit and never the mixed bucket
-    assert cfg["abundance"]["sccoda_reference"] not in ("automatic", "Unknown", label)
+    # run 3 (§3.12): scCODA replaced by paired within-compartment tests; the mixed bucket is never tested
+    assert "Unknown" in cfg["abundance"]["exclude_groups"] and "Unknown" in cfg["de"]["exclude_groups"]
 
 
 # ------------------------------------------------------------------ #1 Milo contrast

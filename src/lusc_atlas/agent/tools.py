@@ -11,8 +11,8 @@ docs/design/A_agentic_research.md §3):
 3. **Provenance on every call.** Each result carries the exact SQL executed and the tables it read, so the
    UI can show where every number came from and the eval can check it.
 4. **Caveats travel with the data.** Semantic tools attach the open known issues that affect the rows
-   they return (e.g. the scCODA reference-type problem), so an answer cannot quote a number without
-   having been handed its caveat.
+   they return (e.g. the failed CNV false-positive check, the cross-study null), so an answer cannot quote
+   a number without having been handed its caveat.
 """
 
 from __future__ import annotations
@@ -37,10 +37,24 @@ REPO = Path(__file__).resolve().parents[3]
 LOCAL_DB = REPO / "results" / "dashboard" / "lusc_atlas.duckdb"
 
 CONTRASTS = {
-    "paired_tumour_vs_adjacent": "tumour vs adjacent normal, same patients (primary; ~donor + condition)",
-    "tumour_vs_healthy": "tumour vs healthy donors (secondary; confounded with study by design)",
-    "malignant_vs_healthy_basal": "CNV-called malignant cells vs healthy basal cells (epithelial question)",
+    "paired_tumour_vs_adjacent": (
+        "tumour vs adjacent normal, same patients (primary; ~donor + tissue). Groups have a tier: 'primary' "
+        "(≥ 6 pairs from ≥ 2 studies) or 'descriptive'; `robust` = also survives leave-one-study-out and "
+        "per-study checks; padj_thr tests |log2FC| > log2(1.5)"
+    ),
+    "tumour_vs_healthy": "tumour vs healthy donors (atlas- and study-confounded; hypothesis-generating)",
+    "adjacent_vs_healthy": (
+        "adjacent normal vs healthy donors (atlas- and study-confounded; hypothesis-generating)"
+    ),
+    "malignant_vs_healthy_basal": (
+        "CNV-called malignant cells vs healthy basal cells (cross-atlas; calls provisional, issue 16)"
+    ),
+    "cnvlow_tumour_vs_healthy_basal": (
+        "tumour-tissue epithelium without a CNV call vs healthy basal cells "
+        "(cross-atlas; hypothesis-generating)"
+    ),
 }
+PAIRED = "paired_tumour_vs_adjacent"
 CONDITIONS = ["healthy", "adjacent_normal", "tumour", "tumour_region_unknown"]
 STAGES = [
     "cohort",
@@ -213,10 +227,14 @@ TOOL_SPECS: list[dict] = [
     _spec(
         "top_de_genes",
         "Top differentially expressed genes for one contrast and cell type (pseudobulk PyDESeq2), ranked by "
-        "adjusted p then |log2FC|. direction: up = higher in the case group (tumour / malignant).",
+        "adjusted p then |log2FC|. direction: up = higher in the case group (tumour / malignant). Paired "
+        "results carry tier, 95 % CI, the thresholded test and the study-robustness flag.",
         {
             "contrast": _CONTRAST,
-            "cell_type": {"type": "string", "description": "DE group, e.g. 'Macrophage', 'CD8 T'"},
+            "cell_type": {
+                "type": "string",
+                "description": "DE group, e.g. 'Macrophage (monocyte-derived)', 'CD8 T'",
+            },
             "direction": {"type": "string", "enum": ["up", "down", "both"]},
             "n": _N,
             "padj_max": {"type": "number", "minimum": 0, "maximum": 1},
@@ -244,10 +262,10 @@ TOOL_SPECS: list[dict] = [
     ),
     _spec(
         "composition_change",
-        "scCODA compositional analysis: change in each cell type's proportion in one condition vs adjacent "
-        "normal (log2 fold change, inclusion probability; credible if ≥ 0.8). Includes the reference-type "
-        "caveat.",
-        {"condition": {"type": "string", "enum": ["tumour", "healthy", "tumour_region_unknown"]}},
+        "Paired composition test: change in each immune cell type's share of immune cells, tumour vs "
+        "adjacent normal in the same patients (NB GLM with patient effects, plus propeller and CLR paired "
+        "t-tests; 'consistent' = all three agree at FDR 0.05).",
+        {"condition": {"type": "string", "enum": ["tumour"]}},
     ),
     _spec(
         "ccc_top_interactions",
@@ -427,7 +445,8 @@ class AtlasTools:
                           count(DISTINCT study) studies, count(*) FILTER (WHERE malignant) malignant_cells
                    FROM cells),
              p AS (SELECT count(*) paired_patients FROM (SELECT donor_id FROM cohort_donors GROUP BY donor_id
-                   HAVING bool_or(condition = 'tumour') AND bool_or(condition = 'adjacent_normal'))),
+                   HAVING bool_or(condition IN ('tumour', 'tumour_region_unknown'))
+                      AND bool_or(condition = 'adjacent_normal'))),
              v AS (SELECT count(*) visium_spots FROM visium_spots)
         SELECT * FROM c, p, v"""
         res = self._result("cohort_summary", {}, self._query(sql), sql)
@@ -435,11 +454,16 @@ class AtlasTools:
                     FROM cells GROUP BY 1, 2 ORDER BY 1, 2"""
         res.rows.append({"breakdown_by_atlas_condition": _records(self._query(by_sql))})
         res.sql.append(" ".join(by_sql.split()))
+        pre_sql = "SELECT count(DISTINCT donor_id) donors, sum(n_cells) cells FROM cohort_donors"
+        pre = self._query(pre_sql).iloc[0]
+        res.sql.append(pre_sql)
         res.note = (
-            "Counts are post-QC (sc_annotated.h5ad). The pre-QC cohort (cohort_donors) has 160 donors / "
-            "249,402 cells; 26 samples with < 200 cells were dropped before QC, removing 9 donors. "
-            "paired_patients is counted on the pre-QC cohort_donors table."
+            f"Counts are post-QC. The pre-QC cohort (cohort_donors) has {int(pre.donors)} donors / "
+            f"{int(pre.cells):,} cells; small samples are dropped before QC. paired_patients is counted on "
+            "the pre-QC cohort_donors table (tumour of unrecorded region counts as tumour). malignant_cells "
+            "are provisional: the CNV false-positive check failed (issue 16)."
         )
+        res.caveats = self._issues_for(ids=[16])
         return res
 
     def t_describe_contrasts(self) -> ToolResult:
@@ -449,7 +473,7 @@ class AtlasTools:
         res = self._result("describe_contrasts", {}, self._query(sql), sql)
         for r in res.rows:
             r["meaning"] = CONTRASTS.get(r["contrast"], "")
-        res.caveats = self._issues_for(ids=[2])
+        res.caveats = self._issues_for(ids=[12, 16, 17])
         return res
 
     def _check_contrast(self, contrast: str) -> None:
@@ -473,7 +497,8 @@ class AtlasTools:
             raise ToolError("direction must be up, down or both")
         sign = {"up": "AND log2FoldChange > 0", "down": "AND log2FoldChange < 0", "both": ""}[direction]
         n = max(1, min(int(n), MAX_ROWS))
-        sql = f"""SELECT gene, log2FoldChange, padj, baseMean, stat, n_case, n_control
+        sql = f"""SELECT gene, log2FoldChange, ci_low, ci_high, padj, padj_thr, tier, robust, k_concordant,
+                         k_studies, baseMean, n_case, n_control
                   FROM de_pseudobulk
                   WHERE contrast = '{contrast}' AND "group" = '{cell_type.replace("'", "''")}'
                     AND padj < {float(padj_max)} {sign}
@@ -491,20 +516,26 @@ class AtlasTools:
         res.note = (
             f"{tot} genes pass padj < {padj_max} ({direction}). log2FoldChange > 0 = higher in case group."
         )
+        ids = [] if contrast == PAIRED else [17]
+        if "malignant" in contrast:
+            ids.append(16)
         if cell_type == "Unknown":  # cells without a usable label (issue 2 explains what it holds)
-            res.caveats = self._issues_for(ids=[2])
+            ids.append(2)
+        res.caveats = self._issues_for(ids=ids)
         return res
 
     def t_gene_de_lookup(self, gene: str) -> ToolResult:
         gene = gene.strip().upper()
-        sql = f"""SELECT contrast, "group" AS cell_type, log2FoldChange, padj, baseMean, n_case, n_control
+        sql = f"""SELECT contrast, "group" AS cell_type, tier, log2FoldChange, ci_low, ci_high, padj, robust,
+                         baseMean, n_case, n_control
                   FROM de_pseudobulk WHERE gene = '{gene.replace("'", "''")}' ORDER BY padj NULLS LAST"""
         df = self._query(sql)
         res = self._result("gene_de_lookup", {"gene": gene}, df, sql)
         if df.empty:
             res.note = f"{gene} was not tested (not in the gene space or too lowly expressed in every group)."
-        elif (df.cell_type == "Unknown").any():
-            res.caveats = self._issues_for(ids=[2])
+        else:
+            res.note = "Only the paired contrast is within-patient; the others cross studies (issue 17)."
+            res.caveats = self._issues_for(ids=[17] + ([2] if (df.cell_type == "Unknown").any() else []))
         return res
 
     def t_gene_expression(self, gene: str, condition: str | None = None) -> ToolResult:
@@ -528,27 +559,26 @@ class AtlasTools:
         return res
 
     def t_composition_change(self, condition: str = "tumour") -> ToolResult:
-        if condition not in CONDITIONS or condition == "adjacent_normal":
+        if condition != "tumour":
             raise ToolError(
-                "condition must be tumour, healthy or tumour_region_unknown (reference = adjacent_normal)"
+                "only tumour vs adjacent normal (paired, same patients) is tested; healthy donors come from "
+                "other studies and sorting protocols, so their proportions are not comparable"
             )
-        sql = f"""SELECT "Cell Type" AS cell_type, "log2-fold change" AS log2_fold_change,
-                         "Inclusion probability" AS inclusion_probability,
-                         "Inclusion probability" >= 0.8 AS credible
-                  FROM composition_sccoda
-                  WHERE Covariate LIKE '%T.{condition}]%'
-                  ORDER BY credible DESC, abs("log2-fold change") DESC"""
+        sql = """SELECT compartment, cell_type, consistent, glm_log2fc, glm_ci_low, glm_ci_high, glm_padj,
+                        propeller_padj, clr_padj, mean_share_adjacent, mean_share_tumour,
+                        n_donors_higher_in_tumour, n_donors, k_studies, k_studies_same_direction
+                 FROM composition_paired
+                 ORDER BY consistent = 'not consistent across models', glm_padj"""
         df = self._query(sql)
-        if df.empty:
-            raise ToolError(f"no scCODA covariate for condition '{condition}'")
         res = self._result("composition_change", {"condition": condition}, df, sql)
-        ref = self._query("SELECT any_value(reference) AS r FROM composition_sccoda").r.iloc[0]
+        n_cons = int((df.consistent != "not consistent across models").sum())
         res.note = (
-            f"vs adjacent_normal. Credible = inclusion probability ≥ 0.8 ({int(df.credible.sum())} of "
-            f"{len(df)} types). Effects are relative to the reference cell type '{ref}' (fixed in config), "
-            "which is assumed not to change."
+            f"Tumour vs adjacent normal within the same patients; shares are WITHIN the immune compartment "
+            f"(robust to CD45 sorting). {n_cons} of {len(df)} types change consistently across all three "
+            "models (FDR 0.05, same sign). Milo neighbourhoods agree in direction but none passes FDR "
+            "(issue 18)."
         )
-        res.caveats = self._issues_for(ids=[1, 2])
+        res.caveats = self._issues_for(ids=[13, 18])
         return res
 
     def t_ccc_top_interactions(

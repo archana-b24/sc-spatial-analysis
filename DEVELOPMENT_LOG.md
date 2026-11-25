@@ -345,10 +345,11 @@ The pipeline ran end to end, but reading the outputs (not just the exit codes) s
 | 1 | **Milo tested the wrong contrast** | `milo.da_nhoods(design="~condition")` with no `model_contrasts`. pertpy then tests the *last* level alphabetically, `tumour_region_unknown` (2 HLCA donors), against the reference `adjacent_normal` | the 0 significant neighbourhoods are meaningless, not a null result | `model_contrasts="conditiontumour - conditionadjacent_normal"` on tumour + adjacent samples, with donor in the design (paired, like DE). Rerun Milo only (minutes; scCODA unaffected) | ✅ resolved, run 2 (§3.11) |
 | 2 | **`Unknown` holds ~25k un-called malignant cells** | 57,335 `Unknown` cells; 29,172 have the LuCA author label `malignant cell`, and only 3,903 of those pass the CNV threshold | `Unknown` is mostly tumour cells mixed with unmapped HLCA cells. It contaminates scCODA (chosen as the reference type), DE (7,947 genes) and CCC (top-20 rows). | split it: label CNV-low author-malignant cells as a separate group (e.g. `Tumour epithelial (CNV-low)`), keep `Unknown` for truly unmapped cells, and fix the scCODA reference to a stable type (e.g. Fibroblast or EC capillary). Reruns cnv → downstream | ✅ resolved, run 2 (§3.11) |
 | 3 | **Rare epithelial absorbs tumour signal in cell2location** | 66-cell reference (ionocyte/PNEC/brush) → 66 % of the tumour niche | spatial cell-type abundances are wrong for epithelium | drop or merge reference labels below a minimum size (e.g. < 200 cells) before building signatures. Fixing #2 also gives the reference a proper tumour-epithelium signature. Reruns deconvolve (~10 h CPU) → spatial → ccc spatial part | ✅ resolved, run 2 (§3.8, §3.11) |
-| 4 | Tensor factors do not separate conditions | see §3.9 | interpretation only | report as sample-level programmes; follow-up: study-adjusted test | documented; still true in run 2 (all p ≥ 0.34) |
-| 5 | SOLO vs Scrublet disagreement | 41,531 vs 2,082 flagged; consensus 672 | doublet removal is effectively Scrublet-only; SOLO's rate looks miscalibrated on atlas data that the original authors already QC'd | check SOLO's score distribution per study. Consensus is the conservative choice, so no rerun for v2.0 | documented |
-| 6 | Atlas mixing below random for every cell type | e.g. Fibroblast 0.125 vs 0.493 expected | partly expected (HLCA ≈ healthy, LuCA ≈ tumour, so the same label differs in state), but it limits cross-atlas claims | add a condition-matched mixing metric (adjacent-normal LuCA vs healthy HLCA within type) | documented |
+| 4 | Tensor factors do not separate conditions | see §3.9 | interpretation only | report as sample-level programmes; follow-up: study-adjusted test | run 3 (§3.12): tensor on paired donor × tissue slices, types present in both tissues, paired Wilcoxon |
+| 5 | SOLO vs Scrublet disagreement | 41,531 vs 2,082 flagged; consensus 672 | doublet removal is effectively Scrublet-only; SOLO's rate looks miscalibrated on atlas data that the original authors already QC'd | check SOLO's score distribution per study. Consensus is the conservative choice, so no rerun for v2.0 | run 3 (§3.12): SOLO off; Scrublet + threshold-failure guard |
+| 6 | Atlas mixing below random for every cell type | e.g. Fibroblast 0.125 vs 0.493 expected | partly expected (HLCA ≈ healthy, LuCA ≈ tumour, so the same label differs in state), but it limits cross-atlas claims | add a condition-matched mixing metric (adjacent-normal LuCA vs healthy HLCA within type) | run 3 (§3.12): mixing also on tumour-patient tissue only (like with like) |
 | 7 | `report` provenance row is one run stale | the report reads `provenance/report.json` before writing its own | cosmetic | write own provenance first, or exclude self | ✅ fixed, run 2 (§3.11) |
+| 9 | **Mitochondrial filter never ran** (found 2026-11-14 while rewriting the QC dashboard page) | `median_pct_mt` = 0 and `n_mt_outlier` = 0 in every sample of `qc_per_sample`. LuCA's matrix has no MT genes (17,764 genes, 0 `MT-`), so the Ensembl intersection (C) removes all 13; `qc.compute_qc_metrics` then sums over an empty gene set. Recomputed offline (HLCA from the full raw matrix, LuCA from its author `obs.pct_counts_mito`): 46/215 samples have no MT signal at all (MAD 0); in the other 169, the configured rule (`mad_pct_mt` 3, `max_pct_mt` 20) would flag ~14,000 kept cells (~9 %), incl. 2,533 LuCA cells > 20 % | an intended QC filter was silently inactive; both atlases were mito-filtered by their authors, which limits the impact | compute `pct_counts_mt` in `select` from the full gene set (HLCA raw MT genes; LuCA `pct_counts_mito`), carry it in `obs`, skip the MAD rule where a sample has no MT signal; add a test that fails if `pct_counts_mt` is all-zero; re-run from `qc` | ✅ fixed, run 3 (§3.12): 6,507 cells flagged; 33 of 212 samples have no mito data (three LuCA studies) |
 
 ### 3.11 ✅ Run 2 — fixes for §3.10 #1–#3 (2026-11-12/13)
 
@@ -471,6 +472,379 @@ Mesothelial can't be mapped spatially; trajectory still covers Basal + CNV-calle
 
 ---
 
+### 3.12 ✅ Run 3 — overhaul: study-grounded statistics, matched nulls, the right tissue (2026-11-14 to 16)
+
+Requested by the user ("bioinformatician first, statistically correct, best current methods; is merging donors from
+here and there right?"). Process: two independent audits (pipeline statistics; dashboard pages) → written plan →
+senior-reviewer challenge → implementation → senior review of the diff → full rerun → pages rewritten → final
+review. Plan, review verdicts, before/after and redeploy steps: [docs/design/OVERHAUL_RUN3.md](docs/design/OVERHAUL_RUN3.md).
+Study notes: [docs/design/LEARNING_NOTES.md](docs/design/LEARNING_NOTES.md). Every change below is config-driven.
+
+**A. The merge question (design).** 151 donors / 20 studies, but healthy tissue is 100 % HLCA, tumour 95 % LuCA,
+and no study contains both; sorting protocols differ by study and assays are nearly aliased with atlas. Study can
+therefore not enter any healthy-vs-tumour model (aliased), and a random study effect cannot help (same aliasing;
+K = 4 studies for the paired design). **Decision: pool for representation, infer within donor.** The pooled atlas
+provides the embedding, label transfer, CNV reference cells and deconvolution signatures; inference rests on the
+paired tumour-vs-adjacent design (15 patients, 4 studies, once region-unknown tumour counts as tumour tissue),
+replicated across studies. Rejected: pooling with study covariates (unidentifiable), restricting to one study (5
+patients). Consequence stated on every page: the paired design is effectively **immune-only** (no epithelial or
+stromal type has ≥ 6 pairs); tumour-epithelium results remain atlas-confounded and hypothesis-generating.
+
+**B. Changes by step** (why → what; options considered in OVERHAUL_RUN3 §2):
+
+| Step | Problem (evidence) | Change |
+|---|---|---|
+| fetch_visium / spatial_prep | the 6,195-spot `CytAssist_11mm_FFPE_Human_Lung_Cancer` section is a **neuroendocrine carcinoma** (10x metadata; CHGA 1,067 per 10k in every spot, KRT5/TP63/SOX2 ≤ 0.04 per 10k) | 10x `CytAssist_FFPE_Human_Lung_Squamous_Cell_Carcinoma` (3,858 spots, SR 2.0.0; KRT5/TP63/SOX2 in 72–83 % of spots); per-section raw folder; **tissue-identity gate** (required markers in ≥ 30 % of spots, `visium_identity.csv`). Reverses the 2026-11-09 choice, which assumed both files were the same tissue |
+| select | MT genes lost in the gene intersection (§3.10 #9); healthy age filter bypassed for unknown ages (row-wise fallback missing; 3 donors aged 22–38 kept) | `mito_fraction()` on each atlas' full matrix (HLCA 37 MT- genes; LuCA author `pct_counts_mito`) → `obs.pct_counts_mt` + `mt_source`; row-wise age parsing; explicit `healthy_unknown_age: keep` (flagged `age_known`) |
+| qc | two-sided mito MAD; MAD-0 samples; sample-wide MAD removes low-RNA types (neutrophils); SOLO 17 % (argmax of a balanced classifier); Scrublet threshold failure (HLCA:PX9, 97 %) | all MAD rules within sample × compartment; mito upper tail, 5 MAD (floor 1 pp) + 25 % ceiling, ceiling-only where MAD = 0; Scrublet only, failed thresholds → expected-rate fallback (0.8 %/1,000 cells); marker-based heterotypic rate reported; `qc_per_compartment.csv`; test fails on missing/constant mito |
+| integrate | scANVI scored on its own training labels (circular); atlas mixing over healthy-vs-tumour cells is not diagnostic | labels of the 20k benchmark cells hidden from scANVI (held-out scoring + held-out label-transfer confusion); mixing also computed on tumour-patient tissue only |
+| cnv | `cnv_score` = cluster mean (threshold over ~29 values; 87 % of calls from 3 patients); null from the other atlas | per-sample inferCNV, same-sample reference with 20 % held out as null, window mask from normal epithelium, per-cell signal + cross-fitted consensus correlation, both > sample q99; validation: adjacent call rate, 3q/3p/5p arms, author labels; `cnv_per_sample.csv`, `cnv_window_mask.csv` |
+| de | samples as units (multi-region pseudo-replication); 3-donor groups tested; `Unknown` tested; LOSO promised (§3.3 K) but never implemented; unidentifiable `tumour_vs_healthy` presented alongside | donor × tissue pseudobulk; eligibility ≥ 6 pairs + ≥ 2 studies with ≥ 2 pairs (else "descriptive"); macrophage/CD4 subtypes split; joint `~donor + study:tissue` per-study effects → fixed-effect meta, Q, I²; LOSO; thresholded test (\|log2FC\| > log2 1.5); `robust` flag; ambient flags; global BH; CIs + shrunken LFC; power (MDE); sex-swap check; HLCA study-vs-study technical null; `tumour_vs_healthy` labelled exploratory with `supported_by_paired`; `adjacent_vs_healthy` as a decomposition term |
+| abundance | scCODA on 215 samples, unpaired, sorting-dependent, tumour-only types diluting others | paired donor × tissue units, proportions within the immune compartment, NB GLM (`~donor + tissue`, offset log total) + arcsin-√ and CLR paired t-tests; per-study direction; Milo on donor × tissue units |
+| trajectory | atlas distance between root and endpoint; label-guided embedding | per-donor summaries; Palantir re-run on the label-free scVI latent (Spearman ρ reported) |
+| deconvolve / spatial | ratio of posterior means; Malignant vs CNV-low as separate signatures | proportions = posterior mean of per-sample ratios (`c2l_proportions.csv`); `analysis_group` merges both into "Tumour epithelium" |
+| ccc | tensor on 82 samples with zero-filled protocol gaps; Mann–Whitney ignoring pairing; ccc waited 11 h for Visium | split `ccc` / `ccc_spatial`; tensor on paired donor × tissue slices, types present in both tissues, incomplete pairs dropped; paired Wilcoxon + BH (`ccc_tensor_condition_test.csv`) |
+| runner | run_all is sequential | `scripts/run_parallel.sh`: after `cnv`, three branches run concurrently (de→ccc ‖ abundance→trajectory ‖ deconvolve→spatial→ccc_spatial) with capped threads |
+
+**C. Where it runs.** From the `sc-deploy` worktree (the code the user pushes), with `data/raw` and `data/interim`
+symlinked to the main checkout like `data/processed` and `results/{tables,reports}` already were (identical
+`pixi.lock`). Run-2 outputs archived in the main checkout at `results/_archive_run2_2026-11-13/`; the old Visium
+files moved to `data/raw/visium/CytAssist_11mm_FFPE_Human_Lung_Cancer/`.
+
+**D. Results** (run 3 finished 2026-11-15 12:26 except export; reruns and export 2026-11-16; full before/after table
+in OVERHAUL_RUN3 §5). QC kept 223,406 of 243,318 cells (6,507 high-mito, 1,123 doublets, Scrublet guard never
+triggered). scANVI chosen on held-out labels (scIB 0.668). **The pre-registered CNV gate failed** on the
+false-positive criterion (adjacent call rate 7.9 % > 5 %; UKIM-V's three adjacent samples 18–35 %, the other six
+3.2 % pooled); the threshold was not moved, malignant-cell results are provisional (known issue 16), and the
+primary paired DE does not use the calls. Paired DE: 10 primary-tier types (all immune), 126 robust
+gene × type changes in 9 of them under the headline rule (robust ∧ global thresholded FDR ∧ not a contamination
+suspect; e.g. *CXCL13*/*ENTPD1* in CD8 T, *SPP1*/*MMP12* in macrophages; 26 robust rows flagged as possible
+contamination: Ig genes, and Treg markers whose source type expands in tumour). Paired immune composition: Treg, B, plasma up; alveolar macrophages,
+non-classical monocytes down (three models agree). Milo: 0 neighbourhoods at FDR 0.1, direction ρ = 0.96 with
+the cell-type test (issue 18). Cross-study null: 14–73 % of genes at p < 0.01 between two sets of healthy
+studies (issue 17) — the quantitative case for the paired design. Tensor (11 paired patients): no factor differs.
+
+**E. Bugs found after the run** (each fixed with a regression test; OVERHAUL_RUN3 §5.2): (1) `composition_paired`
+built its design from a categorical `donor_id` → all-zero dummy columns → the NB GLM silently fell back to
+quasi-Poisson for every type and `k_studies` counted unused categories — fixed (string keys; NB by BFGS from
+Poisson start values), `abundance` rerun; (2) decoupler drops obs columns that vary within a pseudobulk unit, and
+two Leader_Merad patients pool 3′ v2 and 5′ v1 libraries → `assay` vanished, unpaired designs lost it and the
+cross-study null was empty — restored as a "+"-joined value, `de` rerun (paired contrast unchanged, max |Δ| = 0);
+(3) export failed on that empty table and on an unquoted YAML colon — empty optional tables are now skipped;
+(4) Trajectory page hover needed a `study` column; (5) agent/MCP tools and eval set still used scCODA and run-2
+group names — updated.
+
+**F. Final reviews** (senior statistical pass + figure/science-communication pass on the rendered pages; full table
+in OVERHAUL_RUN3 §4.3). Why each change: the failed CNV gate has to travel with every result that uses the calls
+(issue 16 now also on DE and Trajectory, "provisional" badges and headlines); one headline rule for "robust"
+(global thresholded FDR, not a contamination suspect) instead of mixing per-type and global scopes; a second
+contamination route (marker of a cell type that itself expands in tumour, e.g. IL2RA from Tregs) flagged in
+export — options considered: per-gene ratio only (misses it), dropping marker genes by list (arbitrary); a
+**within-study calibration null** (random halves of one study: ≈ 1.4 % of genes at p < 0.01) so the cross-study
+null can be read as study effect rather than a miscalibrated test — option rejected: quoting the cross-study null
+alone; a **UKIM-V sensitivity** for the malignant-dependent results (unchanged); a validated categorical palette
+without tissue/atlas/direction hues; the Milo figure redrawn for a null result; sex check reports paired
+patients and "undetermined"; QC states which studies had no mito filter (issue 9 → partly resolved). Gates: lint,
+format, default tests 42 passed, dashboard tests 63 passed, 14 pages + 71 widget states render, cloud dry run
+passed (peak 486 MB).
+
+### 3.13 ✅ Control groups: what each comparison can and cannot show (decided 2026-11-16; revised after three reviews; run 4 done 2026-11-17)
+
+**Question (user, after run 3).** Would healthy controls *from the same studies as the tumours* be better than
+healthy donors pooled from other studies? The user's rule: accuracy over sample size. No control is added just to
+make n bigger, and every step must be explainable.
+
+**Short answer.** Such controls do not exist in the two atlases. No study that gives LUSC tumours also gives healthy
+donors. So the main comparison stays **tumour vs adjacent normal tissue of the same patient**. Two corrections come
+out of the reviews: (1) the "healthy" group was not all healthy lung tissue, so the cohort now keeps only lung
+tissue from people without cancer; (2) the planned "field-effect check" is dropped, because no outcome of it could
+be interpreted. Two cheaper checks of the main result replace it.
+
+**The rule behind the cohort.** Every sample has one job, and a sample without a job is left out:
+
+| Group | Who | Its one job |
+|---|---|---|
+| Paired LUSC patients | 15 patients, tumour + adjacent tissue | **Evidence.** Every claim comes from these |
+| Other LUSC tumours | tumour-only patients (mainly Wu_Zhou_2021) | **Context.** Tumour cells for malignant-cell calling, the trajectory and the spatial reference; the paired studies are mostly immune cells, so nearly all tumour epithelium comes from here |
+| Healthy lung | organ-donor, explant and autopsy lung tissue from people without cancer (run 4: 87 donors selected, 81 after QC, 9 studies) | **Context.** What normal lung looks like: labels, embedding, CNV window mask, trajectory root, figures |
+
+**Words used below.**
+* *Adjacent normal*: tissue taken from the same lung as the tumour during surgery, judged tumour-free.
+* *Paired*: one patient gave both a tumour and an adjacent sample, so the patient is their own control.
+* *Pseudobulk*: the counts of all cells of one type in one sample, summed into one profile.
+* *Primary* cell type: has ≥ 6 paired patients, from ≥ 2 studies that each give ≥ 2 pairs. Only these are tested
+  as evidence. Others are *descriptive* (shown, not claimed).
+* *Field effect* (field cancerisation): molecular changes in normal-looking tissue near a tumour.
+
+**Facts** (checked 2026-11-16 against the run-3 database, the LuCA and HLCA metadata, and the code):
+
+*Who is in the run-3 cohort after QC:* 148 donors, 19 studies, 223,406 cells.
+
+| Study | LUSC patients in cohort | Tumour + adjacent from the same patient | Other normal tissue in the study (available, not used) |
+|---|---|---|---|
+| Leader_Merad_2021 | 5 | 5 | adjacent normal of 24 LUAD patients |
+| UKIM-V | 5 | 5 | adjacent normal of 12 LUAD patients |
+| Goveia_Carmeliet_2020 | 4 | 3 | adjacent normal of 3 LUAD patients |
+| Lambrechts/Thienpont 2018 (taken from HLCA, the primary copy; LuCA's duplicate removed; tumour/adjacent labels imported from LuCA) | 3 | 2 | adjacent normal of 3 LUAD and 2 other NSCLC patients |
+| Wu_Zhou_2021 | 22 | 0 | none (tumour only) |
+| Zilionis_Klein_2019 | 1 (2nd patient removed by QC) | 0 | none |
+| Guo_Zhang_2018 (excluded: Smart-seq2 read counts, not UMI counts) | — | 2 | — |
+| **Total** | **40** | **17 in the atlases → 15 used** | |
+
+* **No study that contributes LUSC tumours also contributes healthy donors.** All 13 healthy studies come from HLCA.
+  LuCA's healthy studies are duplicates of HLCA studies and were removed as non-primary data. So any
+  tumour-vs-healthy comparison is a comparison *between studies*.
+* **The "healthy" group (108 donors after QC) is not all healthy lung tissue.** From HLCA's own metadata:
+
+  | Source (HLCA `tissue_sampling_method`) | Donors | Studies |
+  |---|---|---|
+  | lungs from organ donors | 61 | 7 |
+  | explant lungs | 19 | Gomperts_2021 |
+  | autopsy | 1 | Tata_unpubl |
+  | **tumour-free tissue from cancer surgery** (HLCA: "Healthy (tumor adjacent)") | 17 | Schiller_2020 (9), Schiller_2021 (6), Schultze_unpubl (2) |
+  | **bronchoalveolar lavage** (BAL: cells washed out of the airways, not tissue) | 10 | Janssen_2020 |
+
+  The BAL donors passed the "primary lung only" filter because CELLxGENE labels their tissue "lung". Each of these
+  five studies uses a single source, so they can be handled by study. No HLCA study has both surgery tissue and
+  organ-donor lungs.
+* **The paired design already uses 15 of the 17 paired LUSC patients** in the two atlases. Paired composition uses
+  14 (one Thienpont adjacent sample has 186 immune cells, under the 200-cell minimum). Leader_Merad and UKIM-V
+  together give 10 of the 15.
+* **Pairs per cell type.** The 10 primary types are all immune and have 10–14 pairs. They come from only **2–4
+  studies with ≥ 2 pairs** each (B, Treg, classical monocytes and cDC have 2). All 10 Treg pairs come from Leader_Merad
+  and UKIM-V. The descriptive types (AT2, fibroblasts, capillary and lymphatic endothelium, non-classical monocytes,
+  neutrophils, pDC) have 3–5 pairs.
+* **Why the design is immune-only.** It is not just low cell numbers.
+  - Leader_Merad and UKIM-V samples are 88–97 % immune cells in both tissues (immune-enriched protocols).
+    Goveia_Carmeliet is 46–56 % endothelial.
+  - Adjacent epithelium is alveolar: of 1,134 adjacent epithelial cells, 580 are AT2, 257 AT1 and **3** basal.
+    Squamous tumour cells are basal-like, so they have no same-lineage partner in adjacent tissue. An epithelial
+    "pair" would compare two different lineages.
+* **The same-study LUAD patients differ from the LUSC patients** (LuCA metadata, 15 LUSC vs 42 LUAD patients with
+  adjacent tissue in the 4 paired studies):
+  - Sex: LUSC 10 men / 5 women, LUAD 16 / 26. In Goveia_Carmeliet all 3 LUAD patients are women and all 3 LUSC men.
+  - Smoking: ever-smokers 14 of 15 LUSC vs 33 of 42 LUAD. Only ever/never is recorded, no pack-years.
+  - Stage (I/II/III/IV): LUSC 5/8/2/0, LUAD 24/11/6/1.
+  - Site: LUSC is usually central (near large airways), LUAD usually peripheral, so "adjacent" tissue likely comes
+    from different places.
+* **Background difference between studies.** In run 3, healthy donors of one chemistry (10x 3′ v2, HLCA only) were
+  split into two sets of studies. 14–73 % of genes differed at p < 0.01, depending on cell type. Random halves of one
+  study (Kaminski_2020, 3 splits) gave 1.4 % on average (range 0.2–10 %). **But one set contained the BAL study
+  (Janssen_2020) and the other did not**, so part of the 14–73 % is a tissue difference (airway lavage vs lung
+  tissue), not only a study effect. This null is recomputed (decision 3).
+
+**Decisions** (each: what, why, alternatives rejected):
+
+1. **Main comparison unchanged: tumour vs adjacent normal of the same patient, in immune cell types.**
+   - *What it measures.* The average change in each immune cell type between a patient's tumour and the same
+     patient's adjacent tissue. It is **not** tumour vs healthy lung.
+   - *What cancels.* Anything that is the same for both samples of a patient: genotype, age, sex, smoking history,
+     study, lab, atlas. Chemistry is also matched within each patient's pair (checked).
+   - *What does not cancel.*
+     - Differences in how the two tissues were handled: harder digestion of dense tumour, time to processing, blood
+       content of the adjacent lung, each sample's own ambient RNA. Ambient-RNA flags cover part of this.
+     - Tumour cells or tumour-near tissue inside "adjacent" samples. This shrinks true differences toward zero.
+       UKIM-V's adjacent samples have high CNV call rates (18–35 %, §3.12 D), which fits this.
+     - Changes shared by tumour and adjacent tissue (smoking damage, field effect, inflammation behind a blocked
+       airway). The comparison cannot see them.
+   - *Scope.* Mostly ever-smokers (14 of 15), surgically resected stage I–III tumours. Distance from the tumour is
+     not recorded in either atlas.
+   - *Mixed effects inside one type.* A change in, say, CD8 T cells can be a change of state or a shift between
+     subtypes; only macrophages and CD4 T cells are split into subtypes. Tumours with several regions are summed, so
+     regions count in proportion to their cell numbers.
+   - *Rejected:* none. This is the strongest design these data allow, and it already uses every paired LUSC patient
+     with UMI counts.
+
+2. **LUAD patients' adjacent tissue is not used, neither as controls nor for a separate check.**
+   - *As controls:* it would roughly triple the control samples, but they are different patients with a different
+     disease. The comparison would become unpaired, lose the within-patient cancelling, and bring back sex, smoking,
+     stage and site differences. That changes what is measured without adding evidence for it.
+   - *The planned check "is LUSC-adjacent different from LUAD-adjacent?" is dropped.* A difference could not say
+     which tissue is altered, and it would be mixed up with site, smoking intensity and stage. "Few differences"
+     would be weak evidence at this power, and neither outcome would change any result. It would also need new QC
+     and labels for about 42 donors. (A first draft proposed labelling the added cells with scANVI, but the cohort's
+     DE groups come from the authors' harmonised labels, so that would itself have differed by histology.)
+   - *Rejected:* (a) pooling LUSC- and LUAD-adjacent tissue as one control group; (b) an unpaired LUSC tumour vs
+     all-same-study-adjacent comparison; (c) the LUSC- vs LUAD-adjacent check, even as a descriptive table.
+
+3. **"Healthy" means lung tissue from a person without cancer. Everything else is removed from the cohort.**
+   - *What changes.* The selection step keeps a healthy cell only if HLCA records it as `lung_condition = Healthy`
+     and as organ-donor, explant or autopsy tissue (`cohort.healthy_require`, an allow-list; an atlas without these
+     fields cannot qualify). This removes the BAL study (Janssen_2020, 10 donors) and the three surgery studies
+     (Schiller_2020, Schiller_2021, Schultze_unpubl, 17 donors) from the whole cohort, with the reason written to
+     `merge_exclusions`. The cross-study null no longer contains BAL.
+   - *Why.* BAL is not lung tissue: its cells come from the airway lumen, so comparing it with tissue mixes in a
+     tissue difference. Surgery tissue comes from cancer patients and is the same kind of tissue as our adjacent
+     controls, so calling it "healthy" is wrong. The cross-study null is meant to contain no biology; with BAL in one
+     set it did. Neither group has a job the remaining samples cannot do, so by the rule above they leave.
+   - *Cost.* The cohort changes at the first step, so everything is recomputed (run 4).
+   - *Rejected:* (a) keep all 108 and only relabel them: the word "healthy" would stay wrong for a quarter of the
+     group, and the null would stay mixed; (b) keep them in the atlas as reference only, and drop them just from the
+     healthy comparisons: workable, but it keeps samples whose only role is to be explained away; (c) move the
+     surgery donors into the adjacent group: different patients, cancer type unknown here, no tumour sample to pair
+     with, and a different atlas.
+
+4. **Healthy HLCA donors are a reference, not a control group.**
+   - *Kept uses:* the shared embedding, the label-transfer reference, the CNV window mask, the trajectory root
+     (descriptive) and healthy context in figures. The CNV window mask is built mostly from HLCA healthy basal cells
+     (5,984 of 7,118 normal epithelial cells, 97 % of them from Gomperts_2021) plus 1,134 adjacent epithelial cells;
+     no chr3 window is masked.
+   - *Comparisons with them are descriptive only.* Each is labelled "different studies — descriptive", carries the
+     recomputed cross-study null, and never appears in a headline. That null uses one atlas and one chemistry. Real
+     healthy-vs-tumour comparisons also cross atlas and chemistry, so their background is likely larger.
+   - *Rejected:*
+     - (a) deleting the healthy comparisons: the context is useful when it is labelled;
+     - (b) batch correction across studies (e.g. ComBat) before comparing: when condition and study coincide,
+       correction either removes the biology or invents it;
+     - (c) a study random effect. It *can* be fitted: condition then acts like a study-level variable, as in a
+       cluster-randomised trial. But that only gives the right answer if healthy and tumour studies are otherwise
+       alike. Here they differ systematically in atlas, cell sorting and chemistry, so the model would credit study
+       differences to the tumour.
+
+5. **Two checks of the main result replace the field-effect check.** Both use data already in the cohort.
+   - **(a) Calibration of the paired test (sign-flip null).** Today's within-study null checks the *unpaired* model
+     only; nothing checks the paired model behind the headline. For each primary cell type: swap the tumour and
+     adjacent labels in a random half of the patients (with an odd number, leave one random patient out), refit the
+     same paired model, 3 seeds, and report the share of genes with p < 0.01. Expected: about 1 % or less. Written
+     in advance: a cell type averaging above 3 % (about twice the unpaired check's 1.4 %) is flagged as having
+     p-values that are too small. Real effects that differ between patients make this check lean conservative, so a
+     pass is weaker evidence than a fail.
+   - **(b) What "adjacent" tissue is, per patient (descriptive table).** For each paired patient's adjacent sample:
+     share of immune / epithelial / endothelial / stromal cells, airway vs alveolar epithelium, share of blood-type
+     immune cells (classical monocytes, neutrophils), and the CNV call rate. It shows the reader what each control
+     actually contains. It changes no result.
+   - *Rejected:*
+     - (a) a separate sensitivity analysis without the high-CNV UKIM-V adjacent samples: already covered. UKIM-V
+       holds 29–50 % of the pairs in every primary type, so the refit without UKIM-V is required for "robust", and it
+       drops all 5 UKIM-V patients, not only the 3 high-CNV samples. The page will show that column by name.
+     - (b) HLCA surgery tissue vs organ-donor lungs as a field-effect proxy: no HLCA study has both, so this is
+       again a between-study comparison with the background above.
+     - (c) the LUSC- vs LUAD-adjacent check (decision 2).
+
+6. **More evidence only from external paired datasets, with criteria written first.**
+   - *Required:* pathology-confirmed LUSC (not NOS); tumour + adjacent tissue from the same patient; primary lung;
+     no treatment before surgery; the same cell enrichment for both tissues; UMI-based assay; raw counts; a licence
+     that allows reuse; not already in HLCA or LuCA (checked by accession and patient ID).
+   - *Wanted, not required:* distance of the adjacent sample from the tumour; patient-level sex, smoking and stage.
+   - *How they enter:* as a new study in the same paired design and in the per-study and leave-one-study-out checks.
+   - *Status:* not started; only if the user asks. Until then n = 15 is reported as it is.
+
+**Limits, stated next to every paired result:**
+* Pairs per cell type: 10–14 for primary types, 3–5 for descriptive ones; immune types only.
+* **The test** is the pooled paired model (`~ patient + tissue`, DESeq2). Per-study estimates, their fixed-effect
+  summary (Cochran's Q, I²) and leave-one-study-out refits are checks of heterogeneity, not the test.
+* **Inference holds for these studies only** (2–4 per cell type with ≥ 2 pairs). A random-effects analysis cannot
+  estimate between-study variance from 2–4 studies. Hartung–Knapp intervals with 2 studies use a t value with 1
+  degree of freedom (12.7), which says nothing. The open item "Hartung–Knapp sensitivity" (OVERHAUL_RUN3 §6) is
+  closed, not done.
+* **Leader_Merad and UKIM-V give 10 of 15 patients and all Treg pairs.** "Robust" requires the result to survive
+  a refit without any study that holds ≥ 25 % of a cell type's pairs: UKIM-V in every primary type (29–50 %),
+  Leader_Merad in all but alveolar macrophages (20 % there). UKIM-V also has the high adjacent CNV call rates,
+  which would shrink its effects.
+* **Multiple testing.** Benjamini–Hochberg controls the false discovery rate across all gene × cell-type tests in
+  the primary tier. The "robust" filters are applied afterwards; they can only remove genes, but the false
+  discovery rate of the robust set itself is not formally controlled. DE and composition are separate families,
+  each corrected on its own.
+
+**Implementation** (run 4):
+1. *Code:* healthy allow-list in `select` (decision 3); paired sign-flip null `de_paired_null` (5a) and the
+   adjacent-sample table `adjacent_makeup` (5b) in `de`; tests in `tests/test_controls.py`. Checked on run-3 data
+   before launch: the sign-flip null gives 0.7 % of genes at p < 0.01 on average for CD8 T and B cells (expected ≈ 1 %).
+2. *Wording:* config comments, docstrings, DE and Composition pages and earlier log text for decisions 1, 4 and the
+   limits; the Hartung–Knapp item closed.
+3. *Complete rerun from `select`* (run 4; run 3 archived first).
+4. *Dashboard:* two clearly separated parts, **Evidence** (paired, within patient) and **Context** (descriptive),
+   each page saying in one line which part it belongs to.
+5. The dataset search (decision 6), only if the user asks.
+
+**Corrections to earlier text.**
+* §3.12 A and OVERHAUL_RUN3 §2.1 give run-2 cohort numbers (151 donors, 20 studies, 111 healthy). Run 3 after QC:
+  148 donors, 19 studies, 108 healthy (116 healthy before QC; 8 small healthy donors had no cells left after QC).
+* §3.12 A, OVERHAUL_RUN3 §2.1 option 2 and the DE page say a study random effect "cannot" separate study from
+  condition. Corrected wording: decision 4 (c).
+* "Healthy tissue … no tumour tissue" (OVERHAUL_RUN3 §2.1) is true, but the healthy group includes 17 donors of
+  tumour-free surgery tissue from cancer patients and 10 BAL donors (decision 3).
+* OVERHAUL_RUN3 §2.1 (plan stage) gives 14 pairs with "Thienpont 1", eligibility ≥ 5 pairs, a different "robust"
+  rule, scCODA composition and a 14-patient tensor, and calls `adjacent_vs_healthy` a negative control. As run:
+  15 pairs for DE (14 for composition), the rules in §3.12 B, an 11-patient tensor, and `adjacent_vs_healthy` is a
+  decomposition term. §2.1 carries a note.
+* The first version of this entry said pairing cancels "lab, protocol, chemistry, genotype, age, sex and smoking by
+  design" and that the healthy studies "contain no cancer patients". Both are corrected above.
+
+**Run 4 results** (complete rerun from `select`, finished 2026-11-17 05:21 PST; DB schema 5, `run_id` run4; run 3
+archived in `results/_archive_run3_2026-11-16/`). Every number below is read from the run-4 tables or DB.
+*Run 4 changed only Context results, by design:* the paired samples did not change, so the Evidence (paired DE and
+composition) is identical to run 3.
+
+* **Cohort.** Healthy donors: **87 selected → 81 after QC**, 9 studies (run 3: 116 selected → 108 after QC). The
+  29 removed donors are the ones decision 3 names (counted before QC): Janssen_2020 10 (lavage), Schiller_2020 10,
+  Schiller_2021 6, Schultze_unpubl 3 (surgery tissue; 17 of these 19 had passed QC in run 3). No donor was added.
+  QC dropped 6 healthy donors whose samples had < 200 cells. "Selected" vs "after QC" is written out wherever a
+  donor count appears, so 87 and 81 never look contradictory.
+  Whole cohort: 128 donors, 15 studies, 219,557 cells selected → **121 donors, 15 studies, 200,848 cells, 181
+  samples after QC** (run 3: 157 / 19 / 246,395 → 148 / 19 / 223,406). QC tested 217,462 cells; mitochondrial
+  outliers 5,655, doublets 898; 33 samples have no usable mitochondrial share (unchanged). LUSC patients after QC:
+  40 (15 paired, 25 tumour only), 6 studies.
+* **Integration.** scANVI chosen again; scIB total 0.683, kNN label purity 0.92 (run 3: 0.668 / 0.92).
+* **Malignant cells.** The pre-registered CNV gate still fails: adjacent call rate 7.9 % (identical; UKIM-V
+  adjacent samples 17.6–35.2 %). 16,174 malignant cells; 29 of 40 tumour patients have ≥ 10 (run 3: 16,027 / 28).
+* **Evidence (paired), identical to run 3.** Paired DE rows byte-identical (first 8 columns); 10 primary + 7
+  descriptive cell types; 5,363 significant rows (3,307 in primary types); 174 robust; **126 headline genes** in 9
+  types (robust ∧ global thresholded FDR < 0.05 ∧ not an ambient suspect; 26 suspects). Composition identical:
+  Treg, B and plasma cells up; alveolar macrophages and non-classical monocytes down. Milo 0 of 6,102
+  neighbourhoods (run 3: 0 of 6,208). Tensor: 11 patients, 4 factors, smallest padj 0.17.
+* **Check 5a, paired sign-flip null (`de_paired_null`, new).** No cell type flagged. Mean share of genes at
+  p < 0.01 per type 0.28–0.84 % (all types 0.51 %; single swaps 0.22–1.44 %), against the 3 % flag written in
+  advance. The paired test is not anti-conservative, if anything somewhat conservative. (The check leans
+  conservative because real tumour effects do not vanish in the swap: they become extra noise, up in half the
+  patients and down in the other half, which inflates the dispersion; so a pass is weaker evidence than a fail.
+  Corrects the wording of decision 5a above, which said such effects "make this check lean conservative" without
+  the mechanism.)
+* **Check 5b, what the adjacent samples contain (`adjacent_makeup`, new).** Leader_Merad: 80–100 % immune.
+  UKIM-V: 95–99 % immune, with airway-rich epithelium (31–88 % airway of labelled epithelial cells, on 11–83 cells)
+  and CNV call rates of 18–35 % where tested. Of the CNV-called adjacent cells, 43 of 59 in UKIM-V are labelled
+  multiciliated (14 Unknown, 2 AT2), and in Leader_Merad and Thienpont they are mostly AT1 and multiciliated: normal
+  cell types, which points more to false-positive calls than to tumour cells in the controls (the §3.12 gate
+  failure), though it does not prove it. Goveia_Carmeliet: 51–62 % immune, the rest endothelium. Thienpont:
+  56–62 % immune, 10–21 % epithelial. Blood-type myeloid cells are 0–31 % of immune cells.
+* **Cross-study null, recomputed without lavage.** 6.4–60.8 % of genes at p < 0.01 across 12 cell types (run 3:
+  14–73 %, 11 types, one set containing BAL). The sets are now Kaminski / Misharin_Budinger / Teichmann_Meyer vs
+  Gomperts / Lafyatis_Rojas / Sheppard. The within-study null (random halves of Kaminski_2020) is unchanged: mean
+  1.4 % (0.2–10 %). Conclusion unchanged: study effects dominate any cross-study comparison.
+* **Trajectory (Context): less stable to the embedding than in run 3.** The scVI sensitivity Spearman ρ fell from
+  0.83 to **0.59**. The root cell changed (a different Gomperts_2021 basal cell), and pseudotime is rescaled (malignant median
+  0.276 vs basal 0.186; run 3 0.124 vs 0.083; Palantir scales each run to a maximum of 1, so values are not
+  comparable between runs). A brief check without rerunning anything (lineage.h5ad and the run-3 DB):
+  - the main (scANVI) ordering reproduces run 3 cell for cell: Spearman ρ 0.95 over 21,230 shared cells (basal
+    0.98, malignant 0.94). So the root change and the slightly smaller basal pool (6,052 → 6,017 cells, 5,949 of
+    them healthy; 97 % Gomperts_2021 in both runs) are not the cause;
+  - what changed is the rerun scVI map: its pseudotime agrees with run 3's scANVI pseudotime at only ρ 0.49.
+    About 1 % of cells (malignant, almost all from two Wu_Zhou_2021 patients) sit far out in the scVI diffusion
+    space, which squeezes 97 % of cells below 0.1; but the disagreement is broad (ρ 0.58 with those cells removed;
+    within basal 0.48, within malignant 0.54; per-patient malignant medians ρ 0.48, 29 patients). The scVI map
+    separates basal from malignant cells at least as well (AUC 0.84 vs 0.76 for scANVI).
+  - Reading: the per-cell and per-patient ordering inside each state depends on the embedding; the coarse
+    basal → malignant shift does not. The Trajectory page now says so in plain words (ρ < 0.75 → "depends
+    substantially on the map; a rough picture"). Not tuned. Suggested next step (OVERHAUL_RUN3 §6): repeat the
+    sensitivity over several scVI seeds and roots to see whether 0.83 or 0.59 is typical, before reading any
+    per-patient pseudotime.
+* **Spatial:** unchanged section; 3,858 → 3,816 spots after QC, 8 niches.
+
+**Dashboard after run 4: Evidence / Context.** The sidebar has four groups: *Start here*; *How the data were
+built* (Cohort & merge, Quality control, Integration); ***Evidence** · same-patient comparisons* (DE & pathways,
+Composition); ***Context** · descriptive* (Malignant cells, Trajectory, Spatial, Cell–cell communication); plus
+*Explore*. Stage numbers were dropped from page titles. One coloured line under each title names the part
+(`ui.page_header(part=…)`, `ui.STAGE_PART`); the DE page labels its healthy-donor section as Context; the CCC page
+says its differential scores are derived from the paired DE. Start and Overview show the cohort rule table above
+(`ui.two_parts`, counts from the DB); `ui.confound_banner` no longer claims the paired analysis is "the primary
+analysis on every page". The DE page shows both new checks (sign-flip null figure; "what the controls contain" per
+patient) under "Two checks of the paired comparison itself"; Composition links there. Wording fixes from the
+arbiter review: what pairing does and does not cancel (decision 1) on the DE page, its decision and the glossary;
+the study random effect (decision 4 c) on the DE page and in the cohort and DE decisions; a new cohort decision
+"Who counts as a healthy donor?"; issues 12, 16 and 17 updated (number-free); glossary entries for Evidence /
+Context, healthy donor and the sign-flip null. Run label: "Run 4 (2026-11-16/17): healthy = cancer-free lung
+tissue; paired-test calibration".
+
 ## 4. Looking ahead: AI-native layer
 
 🔍 **Concepts prototyped 2026-11-12 in [docs/design/](docs/design/README.md)** (agentic "Ask the atlas" with read-only DuckDB tools, provenance and an eval set; Nemotron assessment; dashboard explainers + hosting bundle). Original note: ⏳ To be scoped after v2.0.0 ships. Direction: each pipeline step is already a pure function with declared inputs/outputs (`lusc_atlas.steps`) — exactly the shape an agent tool or **Claude Skill** needs. Candidates: a `lusc-atlas` Skill that runs/inspects steps and explains results; an MCP server over the processed AnnData/SpatialData objects; agent-assisted annotation review (cf. CellAgent, scAgent, Biomni — all early, human review required).
@@ -548,3 +922,8 @@ tumour from adjacent).
 | 2026-11-12 | **Free-only hosting implemented** (§1.3): HF Docker-Space bundle parked outside the repo; `scripts/publish_dataset.sh` (DuckDB → public HF Dataset, never a Space; user-run) and `scripts/cloud_dry_run.sh` (clean clone, Python 3.12 venv from `app/requirements.txt`, secrets, DB via `hf_hub_download`, all pages, wrong-sha negative control) — passed on the run-1 DB (15/15 pages, 444 MB); `.streamlit/config.toml` moved to repo root; DB location read from env or `st.secrets` |
 | 2026-11-12 | §3.10 #1–#3 + #7 fixed in code (§3.11): paired Milo contrast; `Tumour epithelial (CNV-low)` split out of `Unknown` + new vs-healthy-basal contrast; scCODA reference `cDC`; cell2location reference ≥ 200 cells, `Unknown` excluded; report provenance current. 9 unit tests + `smoke_test.py --run2` / `--c2l` passed. Run-1 outputs archived; run 2 launched 11:18 PST |
 | 2026-11-13 | **Run 2 ALL DONE** 07:07 PST (19.8 h; deconvolve 11.2 h, ccc 7.0 h): Milo 1,671 / 6,225 significant (run 1: 0); scCODA directions hold with cDC reference; CNV-low group 25,205 cells (SOX2/TP63/CDKN2A up vs healthy basal); tumour niches now CNV-low tumour 40–62 % + Malignant 12–14 % (run 1: Rare epithelial 66 %); 9 niches; tensor 11 × 11 incl. CNV-low, rank 6, still not condition-specific. Dashboard palette crash on 9 niches fixed; all checks + cloud dry run (440 MB) pass. Write-up: `docs/design/FIXES_RUN2.md` |
+| 2026-11-14 | **Run 3 overhaul (§3.12)**: statistics + pages audits, senior review; findings: Visium section is neuroendocrine (switched to 10x LUSC section + identity gate), CNV score = cluster mean, unknown-age bypass, multi-region pseudo-replication, LOSO never implemented. Study-grounded redesign (paired within patient, joint per-study model, LOSO, thresholded tests, paired composition, paired tensor); run-2 outputs archived; full rerun via `scripts/run_parallel.sh` |
+| 2026-11-16 | **Run 3 complete (§3.12 D–E)**: CNV pre-registered gate failed (adjacent call rate 7.9 %; issue 16, threshold not moved); post-run fixes to paired composition (categorical design → NB never fitted) and pseudobulk covariates (`assay` dropped → cross-study null empty), `abundance`/`de`/`export` rerun; known issues 16–18 added; agent tools + eval set moved to run 3; all pages render; quality gates and cloud dry run pass (135 MB DB, peak 483 MB RSS) |
+| 2026-11-16 | **Run 3 final reviews resolved (§3.12 F)**: provisional flags for malignant-dependent results, headline robust rule, expanding-source contamination flag, within-study calibration null (`de_within_study_null`), UKIM-V sensitivity, palette and figure fixes; DE + export rerun; all gates pass |
+| 2026-11-16 | **Control-group decision (§3.13), after three independent reviews (statistics, bioinformatics, arbiter)**: no study contributes both LUSC tumours and healthy donors; paired tumour-vs-adjacent (15 of 17 available paired patients) stays the only evidence; LUAD-adjacent tissue not used and the field-effect check dropped; "healthy" restricted to lung tissue from cancer-free donors (allow-list; removes 10 lavage + 17 tumour-adjacent surgery donors); paired sign-flip null + adjacent-sample table added; statistics wording corrected; complete rerun (run 4) |
+| 2026-11-17 | **Run 4 complete (§3.13)** 05:21 PST: healthy = cancer-free lung tissue (87 selected → 81 after QC; lavage and cancer-surgery tissue removed); Evidence identical to run 3 by design (126 headline genes; same composition shifts); paired sign-flip null passes (0.51 % of genes at p < 0.01, no type flagged); cross-study null without lavage 6.4–60.8 %; `adjacent_makeup` per patient; trajectory scVI sensitivity ρ 0.83 → 0.59 (scANVI ordering reproduces run 3, ρ 0.95; open item). Dashboard split into Evidence (same-patient comparisons) and Context (descriptive); arbiter wording fixes; run label Run 4. Nothing committed, pushed or deployed |

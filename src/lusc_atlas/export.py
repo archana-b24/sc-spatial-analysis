@@ -40,7 +40,11 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3  # run 2, §3.11: + cells.de_group, c2l_reference_labels, milo design cols; niches open
+SCHEMA_VERSION = (
+    5  # run 3 (§3.12): paired/study-grounded tables, per-sample CNV, paired composition, run label
+)
+# v4: start page: + page_guide.stage_what/why/how (what the stage is, why, how it is done)
+# v3: run 2, §3.11: + cells.de_group, c2l_reference_labels, milo design cols; niches open
 # v2 (2026-11-12): + page_guide, glossary, step_stamps, schema_contract, meta provenance
 
 # CSVs loaded 1:1 (table name = file stem). Anything not listed here is not shipped.
@@ -61,7 +65,8 @@ TABLE_FILES = [
     "pathways_progeny",
     "pathways_collectri",
     "pathways_hallmark",
-    "composition_sccoda",
+    "composition_paired",
+    "composition_units",
     "milo_nhoods",
     "trajectory_summary",
     "visium_qc",
@@ -77,8 +82,24 @@ TABLE_FILES = [
     "ccc_tensor_sender_cells",
     "ccc_tensor_receiver_cells",
 ]
-# Shipped when present (added by the run-2 fixes, DEVELOPMENT_LOG §3.11); absent in older runs.
-OPTIONAL_TABLE_FILES = ["c2l_reference_labels"]
+# Shipped when present (run-2 fixes §3.11; run-3 overhaul §3.12); absent in older runs.
+OPTIONAL_TABLE_FILES = [
+    "c2l_reference_labels",
+    "c2l_proportions",
+    "qc_per_compartment",
+    "cnv_per_sample",
+    "cnv_window_mask",
+    "de_per_study",
+    "de_power",
+    "de_sex_check",
+    "de_cross_study_null",
+    "de_within_study_null",
+    "de_paired_null",
+    "adjacent_makeup",
+    "ccc_tensor_condition_test",
+    "trajectory_per_donor",
+    "visium_identity",
+]
 
 # Tables and columns the app (app/) and the agent (src/lusc_atlas/agent/) depend on. Changing one of these is
 # a breaking change: bump SCHEMA_VERSION and update the consumers.
@@ -122,9 +143,9 @@ SCHEMA_CONTRACT: dict[str, list[str]] = {
         "chosen",
     ],
     "atlas_mixing_per_label": ["label", "frac_other_atlas_neighbours", "expected_if_random"],
-    "cnv_summary": ["cnv_group", "n_cells", "mean_cnv_score", "mean_chr3q", "threshold"],
+    "cnv_summary": ["cnv_group", "n_cells", "mean_cnv_score", "mean_cnv_chr3q", "acceptance_passed"],
     "cnv_vs_author_malignant": ["author_malignant", "False", "True"],
-    "cnv_malignant_per_donor": ["donor_id", "condition", "sum", "size"],
+    "cnv_malignant_per_donor": ["donor_id", "study", "tissue_type", "sum", "size"],
     "de_pseudobulk": [
         "gene",
         "log2FoldChange",
@@ -135,15 +156,27 @@ SCHEMA_CONTRACT: dict[str, list[str]] = {
         "group",
         "n_case",
         "n_control",
+        "lfcSE",
+        "inference",
+        "n_donors",
+        "n_studies",
     ],
     "pathways_progeny": ["source", "score", "padj", "contrast", "group"],
-    "composition_sccoda": [
-        "Covariate",
-        "Cell Type",
-        "log2-fold change",
-        "Inclusion probability",
-        "reference",
+    "composition_paired": [
+        "compartment",
+        "cell_type",
+        "n_donors",
+        "mean_share_adjacent",
+        "mean_share_tumour",
+        "glm_log2fc",
+        "glm_ci_low",
+        "glm_ci_high",
+        "glm_padj",
+        "propeller_padj",
+        "clr_padj",
+        "consistent",
     ],
+    "composition_units": ["unit", "donor_id", "study", "tissue_type", "compartment", "cell_type", "n_cells"],
     "milo_nhoods": ["logFC", "SpatialFDR", "nhood_annotation", "design", "contrast", "n_samples", "n_donors"],
     "c2l_reference_labels": ["label", "n_cells", "action", "target"],
     "trajectory_summary": ["lineage_state", "count", "50%"],
@@ -165,7 +198,17 @@ SCHEMA_CONTRACT: dict[str, list[str]] = {
     "genes": ["gene", "in_panel"],
     "decisions": ["stage", "question", "decision", "why", "evidence", "log_ref"],
     "known_issues": ["id", "stage", "severity", "title", "detail", "status", "log_ref"],
-    "page_guide": ["stage", "order", "title", "one_line", "what", "how"],
+    "page_guide": [
+        "stage",
+        "order",
+        "title",
+        "one_line",
+        "what",
+        "how",
+        "stage_what",
+        "stage_why",
+        "stage_how",
+    ],
     "glossary": ["term", "definition"],
     "step_runs": ["step", "finished", "runtime_s", "config_sha256", "packages"],
     "step_stamps": ["step", "stamped_at", "stamp"],
@@ -360,7 +403,30 @@ def build_dashboard_db(cfg: dict, out: Path) -> None:
 
     # ---- 1. result tables, 1:1
     for stem in TABLE_FILES + [f for f in OPTIONAL_TABLE_FILES if (tables / f"{f}.csv").exists()]:
-        db.put(stem.replace("-", "_"), pd.read_csv(tables / f"{stem}.csv"), f"results/tables/{stem}.csv")
+        path = tables / f"{stem}.csv"
+        if stem not in TABLE_FILES and path.stat().st_size < 3:  # an optional analysis that produced no rows
+            log.warning(
+                "optional table %s is empty — not exported (page shows its 'not available' note)", stem
+            )
+            continue
+        db.put(stem.replace("-", "_"), pd.read_csv(path, low_memory=False), f"results/tables/{stem}.csv")
+
+    # run 3 final review: a second contamination route the per-gene ratio misses. If a gene's source type
+    # itself expands in tumour (paired composition: consistently higher), a modest marker ratio (≥ 3) is
+    # enough to explain an apparent rise in another type (e.g. IL2RA from expanding Tregs into macrophages).
+    tabs = set(db.con.execute("SELECT table_name FROM information_schema.tables").df().table_name)
+    if {"de_pseudobulk", "composition_paired"} <= tabs:
+        dcols = set(db.con.execute("SELECT * FROM de_pseudobulk LIMIT 0").df().columns)
+        if {"ambient_ratio", "ambient_source", "ambient_suspect"} <= dcols:
+            min_ratio = float(cfg.get("de", {}).get("ambient_expanding_source_ratio", 3.0))
+            db.con.execute(
+                f"""ALTER TABLE de_pseudobulk ADD COLUMN ambient_expanding_source BOOLEAN;
+                    UPDATE de_pseudobulk SET ambient_expanding_source =
+                      log2FoldChange > 0 AND coalesce(ambient_ratio, 0) >= {min_ratio}
+                      AND ambient_source IN (SELECT cell_type FROM composition_paired
+                                             WHERE consistent = 'higher in tumour');
+                    UPDATE de_pseudobulk SET ambient_suspect = TRUE WHERE ambient_expanding_source;"""
+            )
 
     # per-sample LIANA: keep the informative tail only (483 MB CSV → a few % of rows)
     rank_max = float(dcfg.get("ccc_magnitude_rank_max", 0.01))
@@ -399,12 +465,20 @@ def build_dashboard_db(cfg: dict, out: Path) -> None:
         "condition",
         "harmonised_label",
         "de_group",
+        "analysis_group",
+        "tissue_type",
         "compartment",
         "fine_label",
         "scanvi_prediction",
         "malignant",
         "cnv_score",
+        "cnv_corr",
+        "cnv_status",
+        "cnv_chr3p",
         "cnv_chr3q",
+        "cnv_chr5p",
+        "scanvi_heldout",
+        "mt_source",
         "total_counts",
         "n_genes_by_counts",
         "pct_counts_mt",
@@ -450,7 +524,7 @@ def build_dashboard_db(cfg: dict, out: Path) -> None:
     )
 
     # marker panel: canonical markers + top DE genes per group + top HVGs
-    de = pd.read_csv(tables / "de_pseudobulk.csv")
+    de = pd.read_csv(tables / "de_pseudobulk.csv", low_memory=False)
     n_top = int(dcfg.get("marker_top_de_per_group", 15))
     top_de = (
         de.dropna(subset=["padj"])
@@ -603,6 +677,9 @@ def build_dashboard_db(cfg: dict, out: Path) -> None:
     cfg_text = (repo / "config/config.yaml").read_text()
     meta = {
         "schema_version": str(SCHEMA_VERSION),
+        # which pipeline run produced the numbers (shown in the app footer; §3.12)
+        "run_id": str(dcfg.get("run_id", "")),
+        "run_label": str(dcfg.get("run_label", "")),
         "role": "serving source of truth for dashboard + agent; derived from pipeline outputs by `export`",
         "config_sha256": hashlib.sha256(cfg_text.encode()).hexdigest(),
         "content_sha256": hashlib.sha256((repo / "docs/dashboard_content.yaml").read_bytes()).hexdigest(),

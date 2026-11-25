@@ -6,8 +6,8 @@ cell2location 0.1.5 needs scvi-tools 1.3.x and pyro < 1.9.2, which conflict with
 Two stages (Kleshchevnikov 2022):
 1. RegressionModel on scRNA-seq counts → per-cell-type reference expression signatures,
    with sample and study as batch/covariates so technical effects are not baked into signatures.
-2. Cell2location on Visium counts → posterior cell abundance per spot (we export q05, a conservative
-   estimate, as recommended by the authors).
+2. Cell2location on Visium counts → posterior cell abundance per spot: posterior mean (point estimate,
+   used for proportions and niches) and q05 (conservative lower bound, used for presence calls).
 """
 
 from __future__ import annotations
@@ -111,6 +111,37 @@ def map_spots(vis: ad.AnnData, sig: pd.DataFrame, c2l_cfg: dict, seed: int = 0) 
     )
     mod.train(max_epochs=c2l_cfg["max_epochs"], batch_size=None, train_size=1, accelerator="cpu")
     vis = mod.export_posterior(vis, sample_kwargs={"num_samples": 1000, "batch_size": mod.adata.n_obs})
-    ab = vis.obsm["q05_cell_abundance_w_sf"].copy()
-    ab.columns = [c.replace("q05cell_abundance_w_sf_", "") for c in ab.columns]
-    return ab
+    props = posterior_proportions(mod, vis, c2l_cfg.get("proportion_samples", 500))
+    # §3.12: posterior MEAN abundance is the point estimate used for proportions/niches; q05 (5 % quantile, a
+    # conservative lower bound) is kept for "is this type confidently present" statements only.
+    out = {}
+    for key, prefix in (
+        ("means_cell_abundance_w_sf", "meanscell_abundance_w_sf_"),
+        ("q05_cell_abundance_w_sf", "q05cell_abundance_w_sf_"),
+    ):
+        ab = vis.obsm[key].copy()
+        ab.columns = [c.replace(prefix, "") for c in ab.columns]
+        out[key.split("_")[0]] = ab
+    if props is not None:
+        props.index = out["means"].index
+        props.columns = list(out["means"].columns)
+    return out["means"], out["q05"], props
+
+
+def posterior_proportions(mod, vis: ad.AnnData, num_samples: int = 500) -> pd.DataFrame | None:
+    """Per-spot cell-type proportions as the posterior mean of the RATIO (senior review item 13):
+    proportions are
+    computed in every posterior sample of the abundance ``w_sf`` and then averaged. A ratio of posterior
+    means is
+    not the posterior mean of the ratio. Returns None (caller falls back to ratio of means, logged) on
+    failure."""
+    try:
+        smp = mod.sample_posterior(
+            num_samples=num_samples, batch_size=vis.n_obs, return_samples=True, return_sites=["w_sf"]
+        )
+        w = np.asarray(smp["posterior_samples"]["w_sf"])  # samples × spots × types
+        prop = (w / np.clip(w.sum(-1, keepdims=True), 1e-12, None)).mean(0)
+        return pd.DataFrame(prop, index=vis.obs_names)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("posterior proportions failed (%s); falling back to ratio of posterior means", exc)
+        return None

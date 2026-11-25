@@ -74,17 +74,20 @@ questions:
 
   - id: q08_macrophage_up
     category: de
-    question: Name the three most significant up-regulated genes in tumour macrophages (paired design).
+    question: >-
+      Name the three most significant up-regulated genes in tumour monocyte-derived macrophages (paired
+      design).
     truth_sql: >-
-      SELECT gene FROM de_pseudobulk WHERE contrast = 'paired_tumour_vs_adjacent' AND "group" = 'Macrophage'
-      AND padj < 0.05 AND log2FoldChange > 0 ORDER BY padj LIMIT 3
+      SELECT gene FROM de_pseudobulk WHERE contrast = 'paired_tumour_vs_adjacent'
+      AND "group" = 'Macrophage (monocyte-derived)' AND padj < 0.05 AND log2FoldChange > 0 ORDER BY padj LIMIT 3
     grade: {type: set, min_hits: 2}
 
   - id: q09_spp1_macrophage
     category: de
-    question: What is the log2 fold change of SPP1 in macrophages, tumour vs adjacent normal (paired)?
+    question: >-
+      What is the log2 fold change of SPP1 in monocyte-derived macrophages, tumour vs adjacent normal (paired)?
     truth_sql: >-
-      SELECT log2FoldChange FROM de_pseudobulk WHERE gene = 'SPP1' AND "group" = 'Macrophage'
+      SELECT log2FoldChange FROM de_pseudobulk WHERE gene = 'SPP1' AND "group" = 'Macrophage (monocyte-derived)'
       AND contrast = 'paired_tumour_vs_adjacent'
     grade: {type: number, tol_abs: 0.05}
 
@@ -94,16 +97,15 @@ questions:
     grade: {type: text}
     must_mention: [["not", "no "], ["adjacent", "too few", "minimum", "few epithelial"]]
 
-  - id: q11_composition_credible
+  - id: q11_composition_consistent
     category: composition
     question: >-
-      According to scCODA, which cell types change credibly in proportion in tumour vs adjacent normal, and
-      what caveat applies?
+      Which immune cell types change in proportion between tumour and adjacent-normal tissue of the same
+      patients, consistently across the composition models, and what are the proportions relative to?
     truth_sql: >-
-      SELECT "Cell Type" FROM composition_sccoda WHERE Covariate LIKE '%T.tumour]%'
-      AND "Inclusion probability" >= 0.8
+      SELECT cell_type FROM composition_paired WHERE consistent <> 'not consistent across models'
     grade: {type: set, min_hits: 4}
-    must_mention: [["reference"], ["relative"]]
+    must_mention: [["immune"], ["paired", "same patient", "within patient", "within-patient"]]
 
   - id: q12_milo
     category: composition
@@ -141,7 +143,7 @@ questions:
     question: How many Visium spots are in the spatial dataset, and how many niches were found?
     truth_sql: SELECT count(*) FROM visium_spots
     grade: {type: number, tol_rel: 0.0}
-    must_mention: [["3 niches", "three niches", "3 cellcharter", "three"]]
+    must_mention: [["niche"]]
 
   - id: q17_c2l_reference
     category: caveat
@@ -152,10 +154,10 @@ questions:
 
   - id: q18_doublets
     category: aggregate
-    question: How many doublets were removed, and how do Scrublet and SOLO compare?
+    question: How many doublets were removed, and which detector decided?
     truth_sql: SELECT sum(n_doublet) FROM qc_per_sample
     grade: {type: number, tol_rel: 0.0}
-    must_mention: [["scrublet"], ["solo"]]
+    must_mention: [["scrublet"]]
 
   - id: q19_svg
     category: spatial
@@ -199,3 +201,12 @@ questions:
       p-value isn't.
     grade: {type: text}
     must_mention: [["adjusted", "padj", "multiple testing", "multiple-testing", "false discover"]]
+
+  - id: q25_cnv_gate
+    category: caveat
+    question: >-
+      Did the malignant-cell calls pass the pre-registered acceptance check, and what share of adjacent-normal
+      epithelium was called CNV-high?
+    truth_sql: SELECT any_value(adjacent_call_rate) FROM cnv_summary
+    grade: {type: number, tol_abs: 0.005, as_percent: true}
+    must_mention: [["fail", "did not pass", "not pass", "provisional"]]

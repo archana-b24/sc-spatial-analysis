@@ -2,7 +2,8 @@
 
     pixi run -e dashboard app            # local, reads results/dashboard/lusc_atlas.duckdb
 
-One page per pipeline stage; each answers question → decision → evidence → caveats
+One page per pipeline stage, grouped into how the data were built, Evidence (same-patient comparisons)
+and Context (descriptive) (DEVELOPMENT_LOG §3.13); each answers question → decision → evidence → caveats
 (docs/ROADMAP.md §6), with a reader guide (what / how to read / what it means / caveats;
 docs/design/README.md). The app is read-only: the DuckDB snapshot that `lusc-atlas export` builds from
 pipeline outputs is its single serving source of truth.
@@ -27,19 +28,23 @@ pages = {
     "Start here": [
         st.Page(f"{V}/start.py", title="Start here", icon="🧭", default=True),
         st.Page(f"{V}/overview.py", title="Overview", icon="🏠"),
-        st.Page(f"{V}/issues.py", title="Caveats & limitations", icon="⚠️", url_path="issues"),
         st.Page(f"{V}/glossary.py", title="Glossary", icon="📚"),
     ],
-    "Pipeline stages": [
-        st.Page(f"{V}/cohort.py", title="1 · Cohort & merge", icon="🧬"),
-        st.Page(f"{V}/qc.py", title="2 · Quality control", icon="🧹"),
-        st.Page(f"{V}/integration.py", title="3 · Integration", icon="🧩"),
-        st.Page(f"{V}/malignant.py", title="4 · Malignant cells", icon="🎯"),
-        st.Page(f"{V}/de.py", title="5 · DE & pathways", icon="📊"),
-        st.Page(f"{V}/composition.py", title="6 · Composition", icon="🥧"),
-        st.Page(f"{V}/trajectory.py", title="7 · Trajectory", icon="🧭"),
-        st.Page(f"{V}/spatial.py", title="8 · Spatial", icon="🗺️"),
-        st.Page(f"{V}/ccc.py", title="9 · Cell–cell communication", icon="📡"),
+    "How the data were built": [
+        st.Page(f"{V}/cohort.py", title="Cohort & merge", icon="🧬"),
+        st.Page(f"{V}/qc.py", title="Quality control", icon="🧹"),
+        st.Page(f"{V}/integration.py", title="Integration", icon="🧩"),
+    ],
+    # §3.13: the claims come from the paired, within-patient comparisons; everything else is descriptive
+    "Evidence · same-patient comparisons": [
+        st.Page(f"{V}/de.py", title="DE & pathways", icon="📊"),
+        st.Page(f"{V}/composition.py", title="Composition", icon="🥧"),
+    ],
+    "Context · descriptive": [
+        st.Page(f"{V}/malignant.py", title="Malignant cells", icon="🎯"),
+        st.Page(f"{V}/trajectory.py", title="Trajectory", icon="🧭"),
+        st.Page(f"{V}/spatial.py", title="Spatial", icon="🗺️"),
+        st.Page(f"{V}/ccc.py", title="Cell–cell communication", icon="📡"),
     ],
     "Explore": [
         st.Page(f"{V}/explorer.py", title="Cell & gene explorer", icon="🔎"),

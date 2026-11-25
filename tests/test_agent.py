@@ -73,14 +73,15 @@ def test_cohort_summary_matches_db(tools):
     r = tools.call("cohort_summary")
     row = r.rows[0]
     n = tools._query("SELECT count(*) c, count(DISTINCT donor_id) d FROM cells").iloc[0]
-    assert row["cells"] == n.c and row["donors"] == n.d == 151
-    assert "160" in r.note  # the pre-QC vs post-QC distinction travels with the number
+    assert row["cells"] == n.c and row["donors"] == n.d
+    pre = tools._query("SELECT count(DISTINCT donor_id) d FROM cohort_donors").iloc[0]
+    assert f"{int(pre.d)} donors" in r.note  # the pre-QC vs post-QC distinction travels with the number
 
 
 def test_composition_carries_caveats(tools):
     r = tools.call("composition_change", {"condition": "tumour"})
-    assert {c["issue"] for c in r.caveats} >= {1, 2}
-    assert all("credible" in row for row in r.rows)
+    assert {c["issue"] for c in r.caveats} >= {13, 18}
+    assert all("consistent" in row and "glm_ci_low" in row for row in r.rows)
 
 
 def test_top_de_rejects_untested_group(tools):
@@ -124,7 +125,8 @@ def _scripted(question_calls):
 def test_loop_with_fake_session(tools):
     s = FakeSession("fake", SYSTEM_PROMPT, TOOL_SPECS, script=_scripted([("cohort_summary", {})]))
     res = ask("How many cells?", tools, session=s)
-    assert res.answer == "There are 231,504 cells [cells]."
+    n = int(tools._query("SELECT count(*) c FROM cells").c.iloc[0])
+    assert res.answer == f"There are {n:,} cells [cells]."
     assert res.steps == 1 and [c.tool for c in res.calls] == ["cohort_summary"]
     assert "cells" in res.tables and res.sql and res.grounding["ok"]
 

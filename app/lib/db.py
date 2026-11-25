@@ -108,5 +108,14 @@ def meta() -> dict[str, str]:
     return dict(zip(df["key"], df["value"], strict=True))
 
 
+@st.cache_data(show_spinner=False)
+def config() -> dict:
+    """The pipeline config the snapshot was built with, as stored in the DB (`meta.config_yaml`), so pages can
+    quote thresholds without reading config/config.yaml from disk."""
+    import yaml
+
+    return yaml.safe_load(meta().get("config_yaml", "")) or {}  # noqa: source-of-truth — parses DB text
+
+
 def has_table(name: str) -> bool:
     return not q("SELECT 1 FROM information_schema.tables WHERE table_name = ?", (name,)).empty

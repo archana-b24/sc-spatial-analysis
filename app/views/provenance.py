@@ -3,7 +3,7 @@ import json
 import plotly.graph_objects as go
 import streamlit as st
 from lib.db import meta, q
-from lib.ui import SERIES, decisions, footer, style
+from lib.ui import decisions, footer, style
 
 st.title("Provenance")
 st.markdown(
@@ -25,7 +25,7 @@ fig = go.Figure(
         y=runs.step,
         x=runs.runtime_s / 3600,
         orientation="h",
-        marker_color=SERIES[0],
+        marker_color="#1c5cab",
         customdata=runs.finished,
         hovertemplate="%{y}: %{x:.2f} h<br>finished %{customdata}<extra></extra>",
     )

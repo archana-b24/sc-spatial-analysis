@@ -6,15 +6,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from .ui import CONDITION_COLOR, CONDITION_LABEL, GREY, SERIES, style
-
-COMPARTMENT_COLOR = {
-    "Epithelial": SERIES[0],
-    "Immune": SERIES[1],
-    "Endothelial": SERIES[2],
-    "Stroma": SERIES[3],
-    "Unknown": GREY,
-}
+from .ui import COMPARTMENT_COLOR, CONDITION_COLOR, CONDITION_LABEL, GREY, SERIES, style  # noqa: F401
 
 
 def umap_categorical(
@@ -40,12 +32,21 @@ def umap_categorical(
                 mode="markers",
                 name=f"{label} ({len(d):,})",
                 marker=dict(color=color, size=size, opacity=0.75),
-                customdata=np.stack([d["harmonised_label"], d["condition"], d["study"]], axis=1),
+                customdata=np.stack(
+                    [
+                        d[c] if c in d else np.full(len(d), "")
+                        for c in ("harmonised_label", "condition", "study")
+                    ],
+                    axis=1,
+                ),
                 hovertemplate="%{customdata[0]}<br>%{customdata[1]} · %{customdata[2]}<extra></extra>",
             )
         )
-    fig.update_xaxes(visible=False)
-    fig.update_yaxes(visible=False, scaleanchor="x")
+    # UMAP axes carry no units, but name them (figure review): titles on, ticks and grid off
+    fig.update_xaxes(title_text="UMAP 1", showticklabels=False, showgrid=False, zeroline=False)
+    fig.update_yaxes(
+        title_text="UMAP 2", showticklabels=False, showgrid=False, zeroline=False, scaleanchor="x"
+    )
     return style(fig, height)
 
 
@@ -70,8 +71,11 @@ def umap_continuous(df: pd.DataFrame, values: pd.Series, title: str, height: int
             showlegend=False,
         )
     )
-    fig.update_xaxes(visible=False)
-    fig.update_yaxes(visible=False, scaleanchor="x")
+    # UMAP axes carry no units, but name them (figure review): titles on, ticks and grid off
+    fig.update_xaxes(title_text="UMAP 1", showticklabels=False, showgrid=False, zeroline=False)
+    fig.update_yaxes(
+        title_text="UMAP 2", showticklabels=False, showgrid=False, zeroline=False, scaleanchor="x"
+    )
     return style(fig, height)
 
 

@@ -183,7 +183,7 @@ def build_report(cfg: dict) -> None:
             "## 2. QC",
             "",
             f"{int(qc.n_cells.sum())} cells in → {int(qc.n_kept.sum())} kept across {len(qc)} samples "
-            f"({int(qc.n_doublet.sum())} consensus doublets removed).",
+            f"({int(qc.n_doublet.sum())} doublets and {int(qc.n_mt_outlier.sum())} high-mito cells flagged).",
             "",
         ]
     sec += ["## 3. Integration", ""] + fig_integration(cfg) + [""]
@@ -207,15 +207,36 @@ def build_report(cfg: dict) -> None:
         + fig_pathways(cfg)
         + [""]
     )
-    comp = _read(cfg, "composition_sccoda.csv")
+    comp = _read(cfg, "composition_paired.csv")
     if comp is not None:
-        ref = comp["reference"].iloc[0] if "reference" in comp else "automatic"
+        cols = [
+            c
+            for c in [
+                "compartment",
+                "cell_type",
+                "n_donors",
+                "mean_share_adjacent",
+                "mean_share_tumour",
+                "glm_log2fc",
+                "glm_ci_low",
+                "glm_ci_high",
+                "glm_padj",
+                "propeller_padj",
+                "clr_padj",
+                "k_studies_same_direction",
+                "k_studies",
+                "consistent",
+            ]
+            if c in comp
+        ]
         sec += [
-            "## 6. Composition (scCODA)",
+            "## 6. Composition (paired, within compartment)",
             "",
-            f"Reference cell type: `{ref}` (effects are relative to it).",
+            "Patients with both tumour and adjacent tissue; each cell type as a share of its compartment; "
+            "NB GLM `count ~ donor + tissue` with offset log(compartment total), cross-checked by arcsin-√ "
+            "and CLR paired t-tests (BH within each).",
             "",
-            comp.drop(columns=["reference"], errors="ignore").round(3).to_markdown(index=False),
+            comp[cols].round(3).to_markdown(index=False),
             "",
         ]
     milo = _read(cfg, "milo_nhoods.csv")

@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from .db import has_table, q
+from .db import config, has_table, q
+from .ui import fixed_in, stage_issues
 
 SEV = {"high": "🔴", "medium": "🟠", "low": "🟡"}
 
@@ -21,32 +22,40 @@ def _one(sql: str, params: tuple | None = None):
 
 # ------------------------------------------------------------------------------- per-stage findings
 def _cohort() -> list[str]:
-    pre = _one("SELECT count(DISTINCT donor_id) d, sum(n_cells) c FROM cohort_donors")
+    pre = _one("""SELECT count(DISTINCT donor_id) d, sum(n_cells) c,
+                         count(DISTINCT donor_id) FILTER (WHERE condition = 'healthy') healthy,
+                         count(DISTINCT donor_id) FILTER (WHERE condition <> 'healthy') lusc,
+                         count(DISTINCT donor_id) FILTER (WHERE condition <> 'healthy' AND atlas = 'HLCA') lusc_hlca,
+                         count(DISTINCT donor_id) FILTER (WHERE condition <> 'healthy' AND atlas = 'LuCA') lusc_luca
+                  FROM cohort_donors""")
     post = _one("SELECT count(DISTINCT donor_id) d, count(*) c, count(DISTINCT study) s FROM cells")
-    lusc = _one("""SELECT count(DISTINCT donor_id) FILTER (WHERE condition <> 'healthy') n,
-                          count(DISTINCT donor_id) FILTER (WHERE condition IN ('tumour', 'adjacent_normal')) ta,
-                          count(DISTINCT donor_id) FILTER (WHERE condition <> 'healthy' AND atlas = 'HLCA') hlca
-                   FROM cohort_donors""")
+    lost = _one("""SELECT count(DISTINCT donor_id) FILTER (WHERE condition = 'healthy') h,
+                          count(DISTINCT donor_id) FILTER (WHERE condition <> 'healthy') l
+                   FROM cohort_donors WHERE donor_id NOT IN (SELECT DISTINCT donor_id FROM cells)""")
     paired = _one("""SELECT count(*) n FROM (SELECT donor_id FROM cohort_donors GROUP BY donor_id
                      HAVING bool_or(condition='tumour') AND bool_or(condition='adjacent_normal'))""").n
     return [
-        f"HLCA alone holds only **{int(lusc.hlca)}** LUSC donors, which is why LuCA was added: together they "
-        f"give **{int(lusc.n)}** LUSC patients ({int(lusc.ta)} with a tumour or adjacent-normal sample; the rest "
-        f"only region-unknown tumour tissue), **{int(paired)}** of them with paired tumour + adjacent tissue.",
-        f"The selected cohort has **{int(pre.d)}** donors and **{int(pre.c):,}** cells; after QC the atlas has "
-        f"**{int(post.d)}** donors and **{int(post.c):,}** cells from **{int(post.s)}** studies. The "
-        f"difference of {int(pre.d - post.d)} donors is samples too small for per-sample QC (< 200 cells), "
-        "dropped before QC.",
+        f"**{int(pre.d)}** donors entered the study: **{int(pre.healthy)}** healthy donors (all from HLCA) and "
+        f"**{int(pre.lusc)}** LUSC patients (**{int(pre.lusc_hlca)}** from HLCA, **{int(pre.lusc_luca)}** from "
+        f"LuCA). HLCA alone would give only {int(pre.lusc_hlca)} LUSC patients, which is why LuCA was added.",
+        f"**{int(paired)}** of the {int(pre.lusc)} LUSC patients gave both a tumour and an adjacent-normal sample "
+        "(paired); they carry the main tumour-versus-normal comparison.",
+        f"Quality control (next stage) removed **{int(pre.d - post.d)}** donors ({int(lost.h)} healthy, "
+        f"{int(lost.l)} LUSC) whose samples had too few cells, leaving **{int(post.d)}** donors and "
+        f"**{int(post.c):,}** cells from **{int(post.s)}** studies.",
     ]
 
 
 def _qc() -> list[str]:
-    r = _one("""SELECT sum(n_cells) i, sum(n_kept) k, sum(n_doublet) d, sum(n_doublet_scrublet) s,
-                       sum(n_doublet_solo) so FROM qc_per_sample""")
+    r = _one("""SELECT sum(n_cells) i, sum(n_kept) k, sum(n_outlier) o, sum(n_low_genes) lg, sum(n_doublet) d,
+                       sum(n_mt_outlier) mt, count(*) n, min(median_counts) lo, max(median_counts) hi
+                FROM qc_per_sample""")
     return [
-        f"**{r.k / r.i:.1%}** of cells passed QC ({int(r.k):,} of {int(r.i):,}).",
-        f"Only **{int(r.d):,}** cells were removed as doublets: SOLO flagged {int(r.so):,} and Scrublet "
-        f"{int(r.s):,}, and removal needs both, so doublet removal is effectively Scrublet-only.",
+        f"**{r.k / r.i:.1%}** of tested cells passed ({int(r.k):,} of {int(r.i):,}, {int(r.n)} samples).",
+        f"{int(r.o):,} cells were unusual for their sample and compartment in size or complexity, {int(r.lg):,} "
+        f"had too few genes, **{int(r.mt):,}** had a high mitochondrial share (this filter was inactive in runs 1–2) "
+        f"and **{int(r.d):,}** were doublets.",
+        f"Typical depth differs **{r.hi / r.lo:.0f}-fold** between samples, which is why cut-offs are per sample.",
     ]
 
 
@@ -55,133 +64,190 @@ def _integration() -> list[str]:
     bm["m"] = bm.embedding.str.replace("X_", "", regex=False)
     ch = bm[bm.chosen].iloc[0]
     second = bm[~bm.chosen].iloc[0]
-    last = bm.iloc[-1]
-    mx = _one("""SELECT count(*) n, count(*) FILTER (WHERE frac_other_atlas_neighbours < expected_if_random) b
-                 FROM atlas_mixing_per_label""")
-    return [
-        f"**{ch.m}** scored highest (scIB total **{ch.Total:.3f}**, next {second.m} {second.Total:.3f}) and keeps "
-        f"cell types apart (kNN label purity {ch.knn_label_purity:.3f}).",
-        f"Zero-shot foundation-model embedding ({last.m}) scored lowest ({last.Total:.3f}): without "
-        "fine-tuning it did not remove study effects.",
-        f"In **{int(mx.b)} of {int(mx.n)}** cell types the two atlases mix less than random, partly because the "
-        "same label means healthy cells in HLCA and tumour-environment cells in LuCA.",
-    ]
-
-
-def _malignant() -> list[str]:
-    cs = q("SELECT cnv_group, n_cells, mean_chr3q FROM cnv_summary").set_index("cnv_group")
-    va = q("SELECT * FROM cnv_vs_author_malignant")
-    t = va[va.author_malignant.astype(str) == "True"].iloc[0]
-    called = int(va["True"].sum())
     out = [
-        f"**{int(cs.loc['malignant', 'n_cells']):,}** cells are called malignant. Of these calls, "
-        f"**{int(t['True']) / called:.1%}** are also author-labelled malignant (high precision), but only "
-        f"**{int(t['True']) / (int(t['True']) + int(t['False'])):.0%}** of author-malignant cells pass the "
-        "threshold (low sensitivity): the call is conservative.",
+        f"**{ch.m}** scored highest (scIB total **{ch.Total:.3f}**, next {second.m} {second.Total:.3f}) and keeps "
+        f"cell types apart (kNN label purity {ch.knn_label_purity:.3f}). scANVI was scored on cells whose labels "
+        "were hidden from it during training.",
     ]
-    if "healthy epithelium" in cs.index:
-        ratio = cs.loc["malignant", "mean_chr3q"] / cs.loc["healthy epithelium", "mean_chr3q"]
-        out.append(
-            f"Mean chr3q CNV score is **{ratio:.1f}×** higher in malignant cells than in healthy epithelium, "
-            "the expected LUSC signal."
-        )
-    d = _one("""SELECT count(*) n, count(*) FILTER (WHERE "sum" >= 10) k FROM cnv_malignant_per_donor
-                WHERE condition = 'tumour'""")
-    out.append(
-        f"Only **{int(d.k)} of {int(d.n)}** tumour donors have ≥ 10 malignant cells, so malignant-cell "
-        "results rest on few patients."
-    )
-    low = _one("""SELECT count(*) FILTER (WHERE de_group = 'Tumour epithelial (CNV-low)') n,
-                         count(DISTINCT donor_id) FILTER (WHERE de_group = 'Tumour epithelial (CNV-low)') d
-                  FROM cells""")
-    if int(low.n):
-        out.append(
-            f"The **{int(low.n):,}** author-labelled tumour cells that miss the CNV threshold form their own group, "
-            f"*Tumour epithelial (CNV-low)* ({int(low.d)} donors), instead of hiding in `Unknown`. `Malignant` "
-            "keeps its strict CNV definition."
-        )
+    cols = set(q("SELECT * FROM atlas_mixing_per_label LIMIT 0").columns)
+    if "scope" in cols:
+        mx = q("""SELECT scope, count(*) n, count(*) FILTER (WHERE frac_other_atlas_neighbours < expected_if_random) b
+                  FROM atlas_mixing_per_label GROUP BY 1""").set_index("scope")
+        for sc_, r in mx.iterrows():
+            out.append(f"Atlas mixing below random in **{int(r.b)} of {int(r.n)}** cell types ({sc_}).")
     return out
 
 
-def _de() -> list[str]:
-    s = q("""SELECT contrast, "group", count(*) FILTER (WHERE padj < 0.05) n FROM de_pseudobulk
-             GROUP BY 1, 2 ORDER BY 1, 3 DESC""")
-    p = s[s.contrast == "paired_tumour_vs_adjacent"]
+def _malignant() -> list[str]:
+    cs = q("SELECT * FROM cnv_summary").set_index("cnv_group")
     out = []
-    if not p.empty:
-        top = p.iloc[0]
-        nxt = p[p.group != "Unknown"].iloc[0]
+    mal = cs.loc["malignant (CNV-high)"] if "malignant (CNV-high)" in cs.index else None
+    if mal is not None:
         out.append(
-            f"In the paired comparison, **{p.group.nunique()}** cell types were testable. The most changed is "
-            f"`{top.group}` ({int(top.n):,} significant genes)"
+            f"**{int(mal.n_cells):,}** epithelial cells from **{int(mal.n_donors)}** patients are called malignant "
+            "(both CNV axes above their own sample's null)."
             + (
-                f" — `Unknown` now holds only cells without a usable label, so read it as a mixed group; the "
-                f"most changed named type is **{nxt.group}** ({int(nxt.n):,} genes)."
-                if top.group == "Unknown"
-                else "."
+                " **Provisional:** the pre-registered false-positive check failed (see Malignant cells)."
+                if "acceptance_passed" in cs.columns and not bool(cs["acceptance_passed"].iloc[0])
+                else ""
             )
         )
-    vb = s[s.contrast.str.endswith("_vs_healthy_basal")]
-    if not vb.empty:
-        out.append(
-            "Tumour epithelium vs healthy basal cells (unpaired): "
-            + "; ".join(f"{r.group} **{int(r.n):,}** genes" for r in vb.itertuples())
-            + "."
+        if "adjacent_call_rate" in cs.columns and cs["adjacent_call_rate"].notna().any():
+            ok = bool(cs["adjacent_call_rate_ok"].iloc[0]) if "adjacent_call_rate_ok" in cs.columns else True
+            out.append(
+                f"False-positive check **{'passed' if ok else 'failed'}**: "
+                f"**{cs['adjacent_call_rate'].dropna().iloc[0]:.1%}** of adjacent-normal epithelial cells pass the "
+                "same rule (pre-registered limit ≤ 5 %; each axis' threshold lets through 1 % of held-out normal cells by "
+                "construction, and a call needs both axes)."
+            )
+        nc = (
+            cs.loc["tumour-tissue epithelium, not called"]
+            if "tumour-tissue epithelium, not called" in cs.index
+            else None
         )
-    g = q("""SELECT gene, log2FoldChange, padj FROM de_pseudobulk WHERE contrast = 'paired_tumour_vs_adjacent'
-             AND "group" = 'Macrophage' AND padj < 0.05 AND log2FoldChange > 0 ORDER BY padj LIMIT 3""")
-    if not g.empty:
-        genes = ", ".join(f"*{r.gene}* (log2FC {r.log2FoldChange:+.2f})" for r in g.itertuples())
-        out.append(f"Most significant genes up in tumour macrophages: {genes}.")
-    spp1 = q("""SELECT log2FoldChange, padj FROM de_pseudobulk WHERE gene = 'SPP1' AND "group" = 'Macrophage'
-                AND contrast = 'paired_tumour_vs_adjacent'""")
-    if not spp1.empty:
-        r = spp1.iloc[0]
+        if nc is not None:
+            out.append(
+                f"LUSC hallmark arms, malignant vs not-called tumour epithelium: 3q {mal.mean_cnv_chr3q:+.3f} vs "
+                f"{nc.mean_cnv_chr3q:+.3f}, 3p {mal.mean_cnv_chr3p:+.3f} vs {nc.mean_cnv_chr3p:+.3f}, 5p "
+                f"{mal.mean_cnv_chr5p:+.3f} vs {nc.mean_cnv_chr5p:+.3f} (gain > 0, loss < 0)."
+            )
+    va = q("SELECT * FROM cnv_vs_author_malignant")
+    if not va.empty and "True" in va.columns:
+        t = va[va.author_malignant.astype(str) == "True"]
+        if len(t):
+            t = t.iloc[0]
+            called = int(va["True"].sum())
+            out.append(
+                f"Agreement with the LuCA authors' labels (not ground truth): {int(t['True']) / max(called, 1):.1%} "
+                f"of calls are author-malignant; {int(t['True']) / max(int(t['True']) + int(t['False']), 1):.0%} of "
+                "author-malignant cells are called."
+            )
+    d = _one("""SELECT count(*) n, count(*) FILTER (WHERE "sum" >= 10) k FROM cnv_malignant_per_donor
+                WHERE tissue_type = 'tumour'""")
+    out.append(f"**{int(d.k)} of {int(d.n)}** tumour patients have ≥ 10 malignant cells.")
+    return out
+
+
+PAIRED = "paired_tumour_vs_adjacent"
+
+
+def _de() -> list[str]:
+    p = q(
+        """SELECT "group", any_value(n_donors) d, any_value(n_studies) s, any_value(tier) tier,
+                    count(*) FILTER (WHERE padj < 0.05) sig, count(*) FILTER (WHERE padj_thr < 0.05) thr,
+                    count(*) FILTER (WHERE robust AND padj_thr_global < 0.05
+                                       AND NOT coalesce(ambient_suspect, false)) rob
+             FROM de_pseudobulk WHERE contrast = ? GROUP BY 1 ORDER BY rob DESC, sig DESC""",
+        (PAIRED,),
+    )
+    out = []
+    if p.empty:
+        return out
+    prim = p[p.tier == "primary"]
+    out.append(
+        f"**{len(prim)}** cell types meet the primary bar (≥ 6 paired patients, ≥ 2 studies with ≥ 2 each); "
+        f"{len(p) - len(prim)} more are shown as descriptive. All are immune cell types: adjacent tissue holds "
+        "too few epithelial, stromal or endothelial cells to pair."
+    )
+    if len(prim):
+        top = prim.iloc[0]
         out.append(
-            f"*SPP1* (osteopontin) in macrophages: log2FC **{r.log2FoldChange:+.2f}** (about "
-            f"{2**r.log2FoldChange:.0f}× higher in tumour), padj {r.padj:.1e}."
+            f"Most robust changes: **{top.group}** with **{int(top.rob):,}** robust genes of "
+            f"{int(top.thr):,} significant at > 1.5-fold ({int(top.d)} patients, {int(top.s)} studies). Robust = "
+            "> 1.5-fold at a global FDR of 5 %, not contradicted by any study, holds when each study with ≥ 25 % "
+            "of the pairs is left out in turn, not a contamination suspect."
         )
+        g = q(
+            """SELECT gene, log2FoldChange l, ci_low, ci_high FROM de_pseudobulk WHERE contrast = ? AND "group" = ?
+                 AND robust AND padj_thr_global < 0.05 AND NOT coalesce(ambient_suspect, false)
+               ORDER BY abs(log2FoldChange) DESC LIMIT 4""",
+            (PAIRED, top.group),
+        )
+        if len(g):
+            out.append(
+                f"Largest robust changes in {top.group}: "
+                + ", ".join(
+                    f"*{r.gene}* {r.l:+.1f} [{r.ci_low:+.1f}, {r.ci_high:+.1f}] (≈ {2 ** abs(r.l):.0f}-fold "
+                    f"{'up' if r.l > 0 else 'down'})"
+                    for r in g.itertuples()
+                )
+                + " (log2FC [95 % CI])."
+            )
+    if has_table("de_paired_null"):
+        pn = q("""SELECT "group", avg(frac_p_lt_001) f, bool_or(flagged) flagged FROM de_paired_null
+                  GROUP BY 1""")
+        if len(pn):
+            flag = float(config().get("de", {}).get("sign_flip_flag_frac", 0.03))
+            out.append(
+                f"Calibration of the paired test (tumour and adjacent labels swapped in a random half of the "
+                f"patients): **{pn.f.mean():.1%}** of genes reach p < 0.01 on average (about 1 % expected; a cell "
+                f"type above {flag:.0%} would be flagged); **{int(pn.flagged.sum())} of {len(pn)}** cell types flagged."
+            )
+    if has_table("de_cross_study_null"):
+        n = q("SELECT avg(frac_p_lt_001) f FROM de_cross_study_null").f.iloc[0]
+        t = q("""SELECT avg(CASE WHEN pvalue < 0.01 THEN 1.0 ELSE 0 END) f FROM de_pseudobulk
+                 WHERE contrast = 'tumour_vs_healthy'""").f.iloc[0]
+        w = (
+            float(q("SELECT avg(frac_p_lt_001) f FROM de_within_study_null").f.iloc[0])
+            if has_table("de_within_study_null")
+            else None
+        )
+        if n is not None and t is not None:
+            out.append(
+                f"Context: healthy vs healthy, two sets of studies of one chemistry (no tumour; study and cohort "
+                f"differences only): **{n:.0%}** of genes have "
+                f"p < 0.01; tumour vs healthy: **{t:.0%}**. "
+                + "Study and cohort differences alone produce hits on the same scale as the tumour comparison "
+                "(group sizes and covariates differ, so compare orders of magnitude, not the exact numbers); "
+                + (
+                    f"random halves of one study give {w:.1%} on average (more in some cell types), so the unpaired "
+                    "test itself is roughly calibrated. "
+                    if w is not None
+                    else ""
+                )
+                + "Cross-study "
+                "comparisons cannot be read gene by gene."
+            )
     return out
 
 
 def _composition() -> list[str]:
-    sc = q("""SELECT "Cell Type" ct, "log2-fold change" lfc FROM composition_sccoda
-              WHERE Covariate LIKE '%T.tumour]%' AND "Inclusion probability" >= 0.8 ORDER BY lfc""")
+    c = q("SELECT * FROM composition_paired ORDER BY glm_log2fc")
     out = []
-    if not sc.empty:
-        down = sc[sc.lfc < 0]
-        up = sc[sc.lfc > 0]
-        if len(down):
-            out.append(
-                f"Credibly **lower** in tumour than adjacent tissue ({len(down)} types): "
-                + ", ".join(f"{r.ct} ({r.lfc:+.2f})" for r in down.itertuples())
-                + "."
-            )
+    if not c.empty:
+        d = int(c.n_donors.iloc[0])
+        down = c[c.consistent == "lower in tumour"]
+        up = c[c.consistent == "higher in tumour"]
+        npair = (
+            int(_one("SELECT any_value(n_donors) d FROM milo_nhoods").d) if has_table("milo_nhoods") else d
+        )
+        extra = f" of {npair}; the rest have < 200 immune cells in one tissue" if npair > d else ""
+        down = down.reindex(down.glm_log2fc.abs().sort_values(ascending=False).index)
+        up = up.reindex(up.glm_log2fc.abs().sort_values(ascending=False).index)
+        ctx = f"{d} paired patients{extra}, three models agree; log2 change in share of immune cells"
         if len(up):
             out.append(
-                "Credibly **higher**: " + ", ".join(f"{r.ct} ({r.lfc:+.2f})" for r in up.itertuples()) + "."
+                "**Higher** in tumour than adjacent lung of the same patients: "
+                + ", ".join(f"{r.cell_type} ({r.glm_log2fc:+.2f})" for r in up.itertuples())
+                + f" ({ctx})."
             )
-        ref = q("SELECT any_value(reference) r FROM composition_sccoda").r.iloc[0]
-        out.append(
-            f"These are log2 changes *relative to the reference type `{ref}`*, which is assumed not to change. "
-            "scCODA can only say how types move against each other, never absolute cell numbers."
-        )
+        if len(down):
+            out.append(
+                "**Lower** in tumour: "
+                + ", ".join(f"{r.cell_type} ({r.glm_log2fc:+.2f})" for r in down.itertuples())
+                + f" ({ctx})."
+            )
+        if not len(up) and not len(down):
+            out.append(
+                f"No immune cell type changes consistently across the three models ({d} paired patients)."
+            )
     mi = _one("""SELECT count(*) n, count(*) FILTER (WHERE SpatialFDR < 0.1) s,
                         count(*) FILTER (WHERE SpatialFDR < 0.1 AND logFC > 0) up, any_value(n_donors) d
                  FROM milo_nhoods""")
-    up = q("""SELECT nhood_annotation a, count(*) k FROM milo_nhoods WHERE SpatialFDR < 0.1 AND logFC > 0
-              GROUP BY 1 ORDER BY 2 DESC LIMIT 3""")
-    dn = q("""SELECT nhood_annotation a, count(*) k FROM milo_nhoods WHERE SpatialFDR < 0.1 AND logFC < 0
-              GROUP BY 1 ORDER BY 2 DESC LIMIT 3""")
-    line = (
+    out.append(
         f"Milo (paired, {int(mi.d)} patients): **{int(mi.s):,}** of {int(mi.n):,} neighbourhoods change "
         f"({int(mi.up):,} up, {int(mi.s - mi.up):,} down in tumour)."
     )
-    if len(up):
-        line += " Most up: " + ", ".join(f"{r.a} ({int(r.k)})" for r in up.itertuples()) + "."
-    if len(dn):
-        line += " Most down: " + ", ".join(f"{r.a} ({int(r.k)})" for r in dn.itertuples()) + "."
-    out.append(line)
     return out
 
 
@@ -190,12 +256,37 @@ def _trajectory() -> list[str]:
     if not {"Basal", "Malignant"} <= set(t.index):
         return []
     b, m = t.loc["Basal"], t.loc["Malignant"]
-    return [
-        f"Median pseudotime is **{m.med:.2f}** for malignant cells vs **{b.med:.2f}** for basal cells "
-        f"({int(m['count']):,} vs {int(b['count']):,} cells): malignant cells sit further from healthy basal.",
-        f"The spread is narrower for malignant cells (SD {m['std']:.2f} vs {b['std']:.2f}) and the distributions "
-        "overlap widely, so pseudotime separates the groups only partly.",
+    out = [
+        f"Median pseudotime **{m.med:.2f}** for malignant cells vs **{b.med:.2f}** for basal cells "
+        f"({int(m['count']):,} vs {int(b['count']):,} cells) — a shift of {m.med - b.med:.2f} on a 0–1 scale that "
+        "coincides with the atlas difference between root and endpoint. Malignant calls are provisional.",
     ]
+    if has_table("trajectory_per_donor"):
+        pdn = q("""SELECT lineage_state, count(DISTINCT donor_id) n FROM trajectory_per_donor WHERE n_cells >= 20
+                   GROUP BY 1""").set_index("lineage_state")
+        if "Malignant" in pdn.index:
+            out.append(
+                f"Malignant cells come from **{int(pdn.loc['Malignant', 'n'])}** patients with ≥ 20 cells."
+            )
+    info = q("SELECT value FROM meta WHERE key = 'info_trajectory_info'")
+    if len(info):
+        import json
+
+        j = json.loads(info.value.iloc[0])
+        if j.get("sensitivity_spearman") is not None:
+            out.append(
+                f"Recomputed on the label-free scVI map, pseudotime correlates at Spearman ρ = "
+                f"**{j['sensitivity_spearman']:.2f}** with the main result"
+                + (
+                    "."
+                    if j["sensitivity_spearman"] > 0.75
+                    else ": the ordering depends substantially on the map, so read it as a rough picture."
+                )
+            )
+    out.append(
+        "Root (HLCA) and malignant cells (LuCA) come from different atlases: read this as descriptive."
+    )
+    return out
 
 
 def _spatial() -> list[str]:
@@ -226,17 +317,28 @@ def _spatial() -> list[str]:
 
 
 def _ccc() -> list[str]:
-    top = q("""SELECT source, target, ligand_complex l, receptor_complex r, interaction_stat s
-               FROM ccc_differential ORDER BY interaction_stat DESC LIMIT 3""")
+    top = q("""WITH t AS (SELECT "group" g FROM de_pseudobulk
+                          WHERE contrast = 'paired_tumour_vs_adjacent' AND tier = 'primary' GROUP BY 1)
+               SELECT source, target, ligand_complex l, receptor_complex r, interaction_stat s
+               FROM ccc_differential WHERE source IN (SELECT g FROM t) AND target IN (SELECT g FROM t)
+               ORDER BY interaction_stat DESC LIMIT 3""")
     out = [
-        "Strongest predicted gains in tumour: "
-        + "; ".join(f"{r.l}→{r.r} ({r.source}→{r.target}, stat {r.s:.1f})" for r in top.itertuples())
-        + "."
+        "Strongest predicted gains in tumour among primary-tier cell types (paired DE of both partners): "
+        + "; ".join(f"{r.l}→{r.r} ({r.source}→{r.target}, score {r.s:.1f})" for r in top.itertuples())
+        + ". Score = mean Wald z of ligand and receptor in the paired DE (> 0: both higher in tumour)."
     ]
-    out.append(
-        "Tensor factors do not separate tumour from adjacent samples (known issue 4): read them as "
-        "sample-level programmes, likely tracking donor and study."
-    )
+    if has_table("ccc_tensor_condition_test"):
+        t = q("SELECT * FROM ccc_tensor_condition_test ORDER BY pvalue")
+        if len(t):
+            sig = t[t.padj < 0.05]
+            out.append(
+                f"Communication programmes tested within patient ({int(t.n_donors.max())} patients): "
+                + (
+                    f"**{len(sig)} of {len(t)}** differ between tumour and adjacent tissue (BH padj < 0.05)."
+                    if len(sig)
+                    else f"none of {len(t)} differs between tumour and adjacent tissue after BH correction."
+                )
+            )
     return out
 
 
@@ -263,21 +365,25 @@ def findings(stage: str) -> list[str]:
         return [f"_(interpretation unavailable: {type(e).__name__})_"]
 
 
-def guide(stage: str, expanded: bool = True) -> None:
-    """The four-part reader guide. Rendered under the page title on every stage page."""
+def guide(stage: str, expanded: bool = True) -> None:  # noqa: ARG001 — `expanded` kept for callers
+    """The reader guide under the title of every stage page, always visible: what the stage does, why it is
+    needed and how it is done (curated), then key results (computed from the data) and open caveats."""
     g = q("SELECT * FROM page_guide WHERE stage = ?", (stage,))
-    issues = q("SELECT id, severity, status, title FROM known_issues WHERE stage = ? ORDER BY id", (stage,))
-    with st.expander("📖 Guide to this page", expanded=expanded):
-        c1, c2 = st.columns(2, gap="large")
+    issues = stage_issues(stage, "id, severity, status, title")
+    with st.container(border=True):
+        if not g.empty:
+            r = g.iloc[0]
+            w, y, h = st.columns(3, gap="medium")
+            w.markdown(f"**What this stage does**  \n{r.stage_what}")
+            y.markdown(f"**Why it is needed**  \n{r.stage_why}")
+            h.markdown(f"**How it is done**  \n{r.stage_how}")
+        c1, c2 = st.columns([3, 2], gap="large")
         with c1:
-            if not g.empty:
-                st.markdown(f"**What you're looking at.** {g.iloc[0].what}")
-                st.markdown(f"**How to read it.** {g.iloc[0].how}")
-        with c2:
             f = findings(stage)
             if f:
-                st.markdown("**What it means** *(computed from the data on this page)*")
+                st.markdown("**Key results** *(computed from the data each time the page loads)*")
                 st.markdown("\n".join(f"- {s}" for s in f))
+        with c2:
             if not issues.empty:
                 done = issues["status"].astype(str).str.startswith("resolved")
                 if (~done).any():
@@ -289,7 +395,10 @@ def guide(stage: str, expanded: bool = True) -> None:
                         )
                     )
                 if done.any():
-                    ids = ", ".join(str(i) for i in issues[done]["id"])
-                    st.caption(f"Fixed in run 2: issue {ids} (details on the Caveats & limitations page).")
-                st.page_link("views/issues.py", label="All caveats & limitations", icon="⚠️")
-        st.caption("Unfamiliar term? See the glossary.")
+                    st.caption(
+                        "; ".join(f"{fixed_in(r.status)}: issue {r.id}" for r in issues[done].itertuples())
+                        + "."
+                    )
+        if not g.empty:
+            st.caption(f"**This page shows:** {g.iloc[0].what} **Reading the charts:** {g.iloc[0].how}")
+        st.caption("Unfamiliar term? See the Glossary page.")

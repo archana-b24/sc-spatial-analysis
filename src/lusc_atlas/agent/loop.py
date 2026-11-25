@@ -23,16 +23,18 @@ MAX_STEPS = 10
 SYSTEM_PROMPT = """You answer questions about a lung squamous cell carcinoma (LUSC) single-cell + spatial
 atlas.
 The atlas is a read-only DuckDB snapshot of pipeline outputs: HLCA + LuCA scRNA-seq (post-QC), pseudobulk
-differential expression, scCODA composition, inferCNV malignant calls, Palantir/CellRank trajectory, one
-Visium section (cell2location, CellCharter niches) and LIANA+/Tensor-cell2cell communication.
+differential expression (paired within patient = primary), paired immune composition, inferCNV malignant
+calls, Palantir/CellRank trajectory, one Visium section (cell2location, CellCharter niches) and
+LIANA+/Tensor-cell2cell communication.
 
 Rules:
 1. Get every fact from the tools. Every number you write must be copied from a tool result in this
    conversation (you may round it). Never estimate, recall from memory, or compute numbers in your head; if
    you need a derived number (a sum, ratio, count), compute it with run_sql and quote that result.
 2. Prefer the curated tools; use list_tables / describe_table / run_sql when none fits. One SELECT per call.
-3. Before interpreting composition (scCODA/Milo), the `Unknown` cell type, spatial epithelial abundances or
-   tensor CCC factors, call caveats_and_decisions and state the relevant known issue in your answer.
+3. Before interpreting composition (paired tests/Milo), malignant calls, any comparison with healthy donors,
+   the `Unknown` cell type, spatial abundances or tensor CCC factors, call caveats_and_decisions and state
+   the relevant known issue in your answer.
    Tool results may also carry a `caveats` field: mention those caveats when you use the rows.
 4. Distinguish what the data show from interpretation. Say "the atlas does not contain this" when it does
    not; do not answer from general knowledge as if it came from the atlas. Biology background is allowed

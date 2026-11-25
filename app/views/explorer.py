@@ -2,10 +2,15 @@ import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 from lib.db import q
-from lib.plots import COMPARTMENT_COLOR, umap_categorical, umap_continuous
+from lib.plots import COMPARTMENT_COLOR, umap_categorical, umap_continuous  # noqa: F401
 from lib.ui import ATLAS_COLOR, CONDITION_COLOR, CONDITION_LABEL, footer, style
 
 st.title("Cell & gene explorer")
+st.caption(
+    "A free-exploration view: no statistics are computed here. Colouring by atlas largely also colours by tissue, "
+    "because healthy donors all come from HLCA — differences between those colours are not tumour effects. For "
+    "tested comparisons use pages 5 (genes), 6 (composition) and 9 (communication)."
+)
 st.markdown(
     "Colour the integrated atlas by metadata or by a marker gene, and compare a gene list across cell "
     "types and conditions."
@@ -90,6 +95,6 @@ if sel:
     fig.update_yaxes(categoryorder="category descending")
     st.plotly_chart(style(fig, 760))
     st.caption(
-        "Dot size = fraction of cells expressing; colour = mean log-normalised expression. All 231k cells, all genes."
+        "Dot size = fraction of cells expressing; colour = mean log-normalised expression. All cells, all genes; pooled over donors (see page 5 for per-patient tests)."
     )
 footer()

@@ -75,7 +75,9 @@ def embed_pca_harmony(adata: ad.AnnData, hv: ad.AnnData, icfg: dict, seed: int) 
         log.warning("Harmony failed: %s", exc)
 
 
-def embed_scvi_scanvi(adata: ad.AnnData, hv: ad.AnnData, icfg: dict, label_key: str):
+def embed_scvi_scanvi(
+    adata: ad.AnnData, hv: ad.AnnData, icfg: dict, label_key: str, heldout: np.ndarray | None = None
+):
     import scvi
 
     covs = _covariates(hv, icfg["categorical_covariates"])
@@ -87,6 +89,14 @@ def embed_scvi_scanvi(adata: ad.AnnData, hv: ad.AnnData, icfg: dict, label_key: 
     adata.obsm["X_scVI"] = vae.get_latent_representation()
 
     hv.obs["_scanvi_label"] = hv.obs[label_key].astype(str).replace({"nan": "Unknown"})
+    if heldout is not None:
+        # §3.12: the benchmark cells' labels are hidden from scANVI, so its bio-conservation scores (and the
+        # label-transfer check on the dashboard) are measured on cells whose labels it never saw. Runs 1–2
+        # scored
+        # scANVI on its own training labels — circular, and part of why it "won".
+        lab = hv.obs["_scanvi_label"].to_numpy().copy()
+        lab[heldout] = "Unknown"
+        hv.obs["_scanvi_label"] = lab
     lvae = scvi.model.SCANVI.from_scvi_model(vae, unlabeled_category="Unknown", labels_key="_scanvi_label")
     lvae.train(max_epochs=icfg["scanvi_max_epochs"], n_samples_per_label=icfg["scanvi_samples_per_label"])
     adata.obsm["X_scANVI"] = lvae.get_latent_representation()
@@ -184,7 +194,10 @@ def run_integration(
 
     hv = select_hvgs(adata, icfg)
     embed_pca_harmony(adata, hv, icfg, seed)
-    vae, lvae = embed_scvi_scanvi(adata, hv, icfg, label)
+    idx = benchmark_cells(adata.obs_names, icfg["benchmark_n_cells"], seed)
+    adata.obs["scanvi_heldout"] = False
+    adata.obs.iloc[idx, adata.obs.columns.get_loc("scanvi_heldout")] = True
+    vae, lvae = embed_scvi_scanvi(adata, hv, icfg, label, heldout=idx)
     if icfg["run_sysvi"]:
         try:
             embed_sysvi(adata, hv, icfg)
@@ -199,7 +212,6 @@ def run_integration(
             log.warning("scArches mapping failed: %s", exc)
             extra["scarches_error"] = str(exc)
 
-    idx = benchmark_cells(adata.obs_names, icfg["benchmark_n_cells"], seed)
     if fm_embedding is not None:  # foundation model: zero-shot Geneformer, benchmark subsample only
         names, emb = fm_embedding
         if not np.array_equal(names, adata.obs_names[idx].to_numpy()):
@@ -237,12 +249,25 @@ def run_integration(
 
 
 def atlas_mixing_per_label(
-    adata: ad.AnnData, label_key: str, atlas_key: str = "atlas", k: int = 30
+    adata: ad.AnnData,
+    label_key: str,
+    atlas_key: str = "atlas",
+    k: int = 30,
+    conditions: list[str] | None = None,
+    scope: str = "all cells",
 ) -> pd.DataFrame:
-    """Per harmonised cell type: fraction of kNN neighbours from the *other* atlas (high = well mixed)."""
+    """Per harmonised cell type: fraction of kNN neighbours from the *other* atlas (high = well mixed).
+
+    ``conditions`` restricts to cells of those conditions (§3.12). Over all cells the metric compares healthy
+    HLCA cells with tumour-patient LuCA cells, so "below random" is expected biology, not under-integration.
+    Restricted to tumour + adjacent tissue (HLCA's Thienpont patients vs LuCA patients) it compares like with
+    like: the residual is the technical atlas effect.
+    """
     from sklearn.neighbors import NearestNeighbors
 
-    Z = adata.obsm["X_integrated"]
+    if conditions is not None:
+        adata = adata[adata.obs["condition"].astype(str).isin(conditions).to_numpy()]
+    Z = np.asarray(adata.obsm["X_integrated"])
     atlas = adata.obs[atlas_key].astype(str).to_numpy()
     nn = NearestNeighbors(n_neighbors=k + 1).fit(Z)
     rows = []
@@ -259,6 +284,10 @@ def atlas_mixing_per_label(
                 "n_cells": len(idx),
                 "frac_other_atlas_neighbours": float(other),
                 "expected_if_random": float(1 - (frac**2).sum()),
+                "n_cells_hlca": int((atlas[idx] == "HLCA").sum()),
+                "n_cells_luca": int((atlas[idx] == "LuCA").sum()),
+                "scope": scope,
             }
         )
-    return pd.DataFrame(rows).sort_values("n_cells", ascending=False)
+    out = pd.DataFrame(rows)
+    return out.sort_values("n_cells", ascending=False) if len(out) else out

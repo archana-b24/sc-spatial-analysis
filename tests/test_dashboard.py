@@ -71,7 +71,7 @@ def test_schema_contract():
     assert set(stored) == {(t, c) for t, cs in SCHEMA_CONTRACT.items() for c in cs}
     meta = dict(con.execute("SELECT key, value FROM meta").fetchall())
     assert meta["schema_version"] == str(SCHEMA_VERSION)
-    for k in ("built_at", "git_sha", "config_sha256", "content_sha256", "role"):
+    for k in ("built_at", "git_sha", "config_sha256", "content_sha256", "role", "run_id", "run_label"):
         assert meta.get(k), k
     # tables_info must describe every table actually present
     info = set(con.execute("SELECT table_name FROM tables_info").df().table_name)
@@ -141,3 +141,27 @@ def test_series_color_never_runs_out():
     assert cols[: len(SERIES)] == SERIES
     assert len(set(cols)) == 12
     assert series_color(12) == series_color(0)
+
+
+def test_every_page_names_its_part():
+    """§3.13: every stage page belongs to exactly one part (built / Evidence / Context), the sidebar groups
+    say so, and page titles carry no stage numbers (order no longer equals group)."""
+    import re
+    import sys
+
+    import duckdb
+
+    sys.path.insert(0, str(APP))
+    from lib.ui import PART, STAGE_PART
+
+    con = duckdb.connect(str(DB), read_only=True)
+    stages = set(con.execute("SELECT stage FROM page_guide").df().stage)
+    assert stages <= set(STAGE_PART), stages - set(STAGE_PART)
+    assert set(STAGE_PART.values()) <= set(PART)
+    assert {s for s, p in STAGE_PART.items() if p == "evidence"} == {"de", "composition"}
+    entry = (APP / "streamlit_app.py").read_text()
+    assert "Evidence · same-patient comparisons" in entry and "Context · descriptive" in entry
+    assert not re.search(r'title="\d+ · ', entry)
+    for stage in STAGE_PART:
+        src = (APP / "views" / f"{stage}.py").read_text()
+        assert f'part="{STAGE_PART[stage]}"' in src, stage

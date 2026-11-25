@@ -33,12 +33,13 @@ OUTPUTS = {
     "integrate": ["data/interim/03_integrated.h5ad", "results/tables/integration_benchmark.csv"],
     "cnv": ["data/processed/sc_annotated.h5ad", "results/tables/cnv_summary.csv"],
     "de": ["results/tables/de_pseudobulk.csv", "results/tables/pathways_progeny.csv"],
-    "abundance": ["results/tables/composition_sccoda.csv"],
+    "abundance": ["results/tables/composition_paired.csv"],
     "trajectory": ["data/processed/lineage.h5ad", "results/tables/trajectory_summary.csv"],
     "spatial_prep": ["data/interim/visium_qc.h5ad", "results/tables/visium_qc.csv"],
     "deconvolve": ["results/tables/c2l_abundance.csv"],
     "spatial": ["data/processed/visium.h5ad", "results/tables/spatial_niches.csv"],
-    "ccc": ["results/tables/ccc_by_sample.csv"],
+    "ccc": ["results/tables/ccc_by_sample.csv", "results/tables/ccc_tensor_condition_test.csv"],
+    "ccc_spatial": ["results/tables/ccc_spatial_bivariate.csv"],
     "report": ["results/reports/summary.md"],
     "export": ["results/dashboard/lusc_atlas.duckdb"],
 }
@@ -56,11 +57,10 @@ INPUTS = {
     "spatial_prep": ["data/raw/visium/.verified"],
     "deconvolve": ["data/processed/sc_annotated.h5ad", "data/interim/visium_qc.h5ad"],
     "spatial": ["data/interim/visium_qc.h5ad", "results/tables/c2l_abundance.csv"],
-    "ccc": [
-        "data/processed/sc_annotated.h5ad",
-        "results/tables/de_pseudobulk.csv",
-        "data/processed/visium.h5ad",
-    ],
+    # §3.12: split — single-cell CCC no longer waits ~10 h for deconvolution; only the spatial part needs
+    # Visium
+    "ccc": ["data/processed/sc_annotated.h5ad", "results/tables/de_pseudobulk.csv"],
+    "ccc_spatial": ["data/processed/visium.h5ad"],
     "report": [o for k, v in OUTPUTS.items() if k not in ("report", "export") for o in v],
     # dashboard snapshot (ROADMAP §6): reads tables + processed objects, never feeds back into analysis.
     # docs/dashboard_content.yaml is a tracked source file (like config.yaml), so it is not a declared input.
@@ -148,7 +148,7 @@ def fetch_visium(cfg: dict) -> None:
     from .fetch import sha256
 
     vcfg = cfg["data"]["visium"]
-    out = _p(cfg, "data/raw/visium")
+    out = _visium_dir(cfg)  # one folder per section (§3.12: runs 1–2 used a different section)
     out.mkdir(parents=True, exist_ok=True)
     from .fetch import _try_download
 
@@ -163,7 +163,12 @@ def fetch_visium(cfg: dict) -> None:
         if meta.get("extract"):
             with tarfile.open(dest) as tf:
                 tf.extractall(out, filter="data")
-    (out / ".verified").write_text(json.dumps({k: v["sha256"] for k, v in vcfg["files"].items()}, indent=2))
+    stamp = {"sample_id": vcfg["sample_id"], **{k: v["sha256"] for k, v in vcfg["files"].items()}}
+    _p(cfg, OUTPUTS["fetch_visium"][0]).write_text(json.dumps(stamp, indent=2))
+
+
+def _visium_dir(cfg: dict) -> Path:
+    return _p(cfg, "data/raw/visium") / cfg["data"]["visium"]["sample_id"]
 
 
 def fetch_atlases(cfg: dict) -> None:
@@ -211,6 +216,11 @@ def qc(cfg: dict) -> None:
     adata = ad.read_h5ad(_p(cfg, INPUTS["qc"][0]))
     adata, summary = run_qc(adata, cfg["qc"], cfg["project"]["seed"])
     _write_table(summary, _p(cfg, OUTPUTS["qc"][1]))
+    if "qc_per_compartment" in adata.uns:  # §3.12: which compartments the filters hit
+        _write_table(
+            pd.DataFrame(adata.uns.pop("qc_per_compartment")),
+            resolve(cfg, "tables", "qc_per_compartment.csv"),
+        )
     _write_h5ad(adata, _p(cfg, OUTPUTS["qc"][0]))
 
 
@@ -260,12 +270,25 @@ def integrate(cfg: dict) -> None:
     scanvi_model.save(str(_p(cfg, "data/interim/scanvi_model")), overwrite=True)
     _write_table(scores, resolve(cfg, "tables", "integration_benchmark.csv"))
     resolve(cfg, "reports", "integration_info.json").write_text(json.dumps(extra, indent=2, default=str))
+    lab = cfg["integration"]["harmonised_label_key"]
     _write_table(
-        atlas_mixing_per_label(adata, cfg["integration"]["harmonised_label_key"]),
+        pd.concat(
+            [
+                atlas_mixing_per_label(adata, lab),
+                atlas_mixing_per_label(
+                    adata,
+                    lab,
+                    conditions=["tumour", "adjacent_normal", "tumour_region_unknown"],
+                    scope="tumour-patient tissue only (like with like)",
+                ),
+            ],
+            ignore_index=True,
+        ),
         resolve(cfg, "tables", "atlas_mixing_per_label.csv"),
     )
-    lab = cfg["integration"]["harmonised_label_key"]
-    conf = pd.crosstab(adata.obs[lab].astype(str), adata.obs["scanvi_prediction"].astype(str))
+    # §3.12: label-transfer check on HELD-OUT cells only (their labels were hidden from scANVI)
+    ho = adata.obs[adata.obs["scanvi_heldout"].astype(bool) & (adata.obs[lab].astype(str) != "Unknown")]
+    conf = pd.crosstab(ho[lab].astype(str), ho["scanvi_prediction"].astype(str))
     _write_table(
         conf.rename_axis("harmonised_label").reset_index(),
         resolve(cfg, "tables", "scanvi_label_confusion.csv"),
@@ -290,7 +313,7 @@ def cnv(cfg: dict) -> None:
         cfg["data"]["gene_positions"]["url"], _p(cfg, "data/raw/gencode.v44.basic.annotation.gtf.gz")
     )
     annotate_positions(adata, pos)
-    summary = run_infercnv(adata, cfg["cnv"], n_jobs=cfg["project"]["n_jobs"], seed=cfg["project"]["seed"])
+    tabs = run_infercnv(adata, cfg["cnv"], n_jobs=cfg["project"]["n_jobs"], seed=cfg["project"]["seed"])
     ccfg = cfg["cnv"]
     make_de_groups(
         adata,
@@ -298,15 +321,20 @@ def cnv(cfg: dict) -> None:
         cnv_low_label=ccfg.get("cnv_low_label"),
         author_label=ccfg["author_label_check"],
         tumour_conditions=ccfg["tumour_conditions"],
+        refine=cfg["de"].get("refine_groups"),
     )
+    summary = tabs["summary"]
+    summary["adjacent_call_rate"] = summary.attrs.get("adjacent_call_rate")
     _write_table(summary, _p(cfg, OUTPUTS["cnv"][1]))
+    _write_table(tabs["per_sample"], resolve(cfg, "tables", "cnv_per_sample.csv"))
+    _write_table(tabs["window_mask"], resolve(cfg, "tables", "cnv_window_mask.csv"))
     _write_table(
         author_label_concordance(adata, cfg["cnv"]["author_label_check"]),
         resolve(cfg, "tables", "cnv_vs_author_malignant.csv"),
     )
-    per_donor = adata.obs.groupby(["atlas", "donor_id", "condition"], observed=True)["malignant"].agg(
-        ["sum", "size"]
-    )
+    per_donor = adata.obs.groupby(["atlas", "study", "donor_id", "tissue_type"], observed=True)[
+        "malignant"
+    ].agg(["sum", "size"])
     _write_table(per_donor.reset_index(), resolve(cfg, "tables", "cnv_malignant_per_donor.csv"))
     _write_h5ad(adata, _p(cfg, OUTPUTS["cnv"][0]))
 
@@ -314,63 +342,122 @@ def cnv(cfg: dict) -> None:
 def de(cfg: dict) -> None:
     import anndata as ad
 
-    from .de import pathway_activities, pseudobulk, run_contrast, tumour_epithelium_vs_healthy_basal
+    from .de import (
+        add_pseudobulk_unit,
+        adjacent_makeup,
+        ambient_flags,
+        cross_study_null,
+        paired_robustness,
+        paired_sign_flip_null,
+        pathway_activities,
+        power_table,
+        pseudobulk,
+        run_contrast,
+        sex_check,
+        supported_by_paired,
+        tumour_epithelium_vs_healthy_basal,
+        within_study_null,
+    )
 
+    dcfg = cfg["de"]
     adata = ad.read_h5ad(_p(cfg, INPUTS["de"][0]))
-    pdata = pseudobulk(adata, cfg["de"])
+    add_pseudobulk_unit(adata, dcfg["pseudobulk_sample_key"])  # §3.12: patient × tissue = unit of replication
+    _pc = next((sp for sp in dcfg["contrasts"].values() if sp.get("paired", False)), None)
+    if _pc:  # §3.13: what each paired patient's adjacent (control) sample contains
+        _write_table(
+            adjacent_makeup(adata.obs, dcfg["condition_key"], _pc["case"], _pc["control"], dcfg["group_key"]),
+            resolve(cfg, "tables", "adjacent_makeup.csv"),
+        )
+    pdata = pseudobulk(adata, dcfg)
+    del adata
     nj = min(8, cfg["project"]["n_jobs"])
-    res = [
-        run_contrast(pdata, cfg["de"], name, spec, n_jobs=nj) for name, spec in cfg["de"]["contrasts"].items()
-    ]
-    vs_basal = cfg["de"].get("vs_healthy_basal", {"malignant_vs_healthy_basal": "Malignant"})
+    res, loso_all, per_study_all, extra = {}, [], [], {}
+    for name, spec in dcfg["contrasts"].items():
+        r = run_contrast(pdata, dcfg, name, spec, n_jobs=nj)
+        if r.empty:
+            continue
+        if spec.get("paired", False):  # §3.12 study-grounded robustness of the primary contrast
+            loso, per_study, summ = paired_robustness(pdata, dcfg, name, spec, r, n_jobs=nj)
+            r = r.merge(summ, on=["gene", "group"], how="left")
+            amb = ambient_flags(pdata, r, dcfg, dcfg.get("ambient_ratio", 10.0))
+            r = r.merge(amb, on=["gene", "group"], how="left")
+            r["ambient_suspect"] = r["ambient_suspect"].fillna(False).astype(bool)
+            loso_all.append(loso)
+            per_study_all.append(per_study)
+            npairs = r.groupby("group")["n_donors"].first().to_dict()
+            extra["de_power"] = power_table(r, npairs, dcfg["alpha"])
+        res[name] = r
+    primary = [n for n, sp in dcfg["contrasts"].items() if sp.get("paired", False) and n in res]
+    for name, r in res.items():  # atlas-confounded contrasts: does the paired contrast support the gene?
+        if name not in primary and primary:
+            r["supported_by_paired"] = supported_by_paired(r, res[primary[0]], dcfg["alpha"])
+    out = list(res.values())
+    vs_basal = dcfg.get("vs_healthy_basal", {"malignant_vs_healthy_basal": "Malignant"})
     for name, grp in vs_basal.items():
-        res.append(
+        out.append(
             tumour_epithelium_vs_healthy_basal(
-                pdata, cfg["de"], grp, cfg["trajectory"]["root_label"], name, n_jobs=nj
+                pdata, dcfg, grp, cfg["trajectory"]["root_label"], name, n_jobs=nj
             )
         )
-    allres = pd.concat([r for r in res if not r.empty], ignore_index=True)
+    allres = pd.concat([r for r in out if not r.empty], ignore_index=True)
     _write_table(allres, _p(cfg, OUTPUTS["de"][0]))
-    for name, tab in pathway_activities(allres, cfg["de"]["pathways"]).items():
+    if loso_all:
+        _write_table(pd.concat(loso_all, ignore_index=True), resolve(cfg, "tables", "de_loso.csv"))
+        _write_table(pd.concat(per_study_all, ignore_index=True), resolve(cfg, "tables", "de_per_study.csv"))
+    extra["de_sex_check"] = sex_check(pdata, dcfg["condition_key"])
+    extra["de_cross_study_null"] = cross_study_null(pdata, dcfg, n_jobs=nj)
+    extra["de_within_study_null"] = within_study_null(pdata, dcfg, n_jobs=nj)
+    if primary:  # §3.13: calibration of the paired test itself
+        extra["de_paired_null"] = paired_sign_flip_null(pdata, dcfg, dcfg["contrasts"][primary[0]], n_jobs=nj)
+    for k, tab in extra.items():
+        _write_table(tab, resolve(cfg, "tables", f"{k}.csv"))
+    for name, tab in pathway_activities(allres, dcfg["pathways"]).items():
         _write_table(tab, resolve(cfg, "tables", f"pathways_{name}.csv"))
 
 
 def abundance(cfg: dict) -> None:
     import anndata as ad
 
-    from .de import composition_sccoda, milo_da
+    from .de import add_pseudobulk_unit, composition_counts, composition_paired, milo_da
 
+    acfg = cfg["abundance"]
     adata = ad.read_h5ad(_p(cfg, INPUTS["abundance"][0]))
     seed = cfg["project"]["seed"]
-    # composition per sample (tumour and adjacent-normal of one donor are separate samples)
-    eff = composition_sccoda(
-        adata, "de_group", "sample", "condition", seed, reference=cfg["abundance"]["sccoda_reference"]
+    add_pseudobulk_unit(adata, "donor_condition")  # §3.12: donor × tissue units (multi-region samples pooled)
+    cnt = composition_counts(adata.obs, acfg, acfg["group_key"], "donor_condition")
+    _write_table(cnt, resolve(cfg, "tables", "composition_units.csv"))
+    _write_table(
+        pd.concat([composition_paired(cnt, {**acfg, **c}) for c in acfg["paired_tests"]], ignore_index=True),
+        _p(cfg, OUTPUTS["abundance"][0]),
     )
-    _write_table(eff, _p(cfg, OUTPUTS["abundance"][0]))
     # Milo failure fails the step (run 1 swallowed errors with a warning; same policy as ccc, §3.9)
-    milo = milo_da(adata, cfg["abundance"], "sample", "condition", seed)
+    milo = milo_da(adata, acfg, "donor_condition", "tissue_type", seed)
     _write_table(milo, resolve(cfg, "tables", "milo_nhoods.csv"))
 
 
 def trajectory(cfg: dict) -> None:
     import anndata as ad
 
-    from .trajectory import run_trajectory, subset_lineage
+    from .trajectory import per_donor_summary, run_trajectory, subset_lineage
 
     adata = ad.read_h5ad(_p(cfg, INPUTS["trajectory"][0]))
     sub = subset_lineage(adata, cfg["trajectory"], cfg["trajectory"]["label_key"])
     info = run_trajectory(sub, cfg["trajectory"], cfg["project"]["seed"])
     summ = sub.obs.groupby("lineage_state", observed=True)["palantir_pseudotime"].describe().reset_index()
     _write_table(summ, _p(cfg, OUTPUTS["trajectory"][1]))
+    _write_table(per_donor_summary(sub), resolve(cfg, "tables", "trajectory_per_donor.csv"))
     (resolve(cfg, "tables", "trajectory_info.json")).write_text(json.dumps(info, indent=2))
     _write_h5ad(sub, _p(cfg, OUTPUTS["trajectory"][0]))
 
 
 def spatial_prep(cfg: dict) -> None:
-    from .spatial import load_visium, qc_and_cluster, write_spatialdata
+    from .spatial import load_visium, qc_and_cluster, tissue_identity, write_spatialdata
 
-    raw = _p(cfg, "data/raw/visium")
+    raw = _visium_dir(cfg)
     vis = load_visium(raw, cfg["data"]["visium"]["sample_id"])
+    # §3.12: tissue-identity gate BEFORE any analysis — runs 1–2 deconvolved a neuroendocrine section as LUSC
+    ident = tissue_identity(vis, cfg["data"]["visium"]["identity_markers"])
+    _write_table(ident, resolve(cfg, "tables", "visium_identity.csv"))
     summ = qc_and_cluster(vis, cfg["spatial"], cfg["project"]["seed"])
     _write_table(summ, _p(cfg, OUTPUTS["spatial_prep"][1]))
     _write_h5ad(vis, _p(cfg, OUTPUTS["spatial_prep"][0]))
@@ -402,8 +489,17 @@ def deconvolve(cfg: dict) -> None:
     sig.rename_axis("gene").reset_index().to_csv(
         resolve(cfg, "tables", "c2l_reference_signatures.csv"), index=False
     )
-    ab = map_spots(vis, sig, cfg["spatial"]["c2l"], seed)
+    ab, q05, props = map_spots(vis, sig, cfg["spatial"]["c2l"], seed)
     _write_table(ab.rename_axis("spot").reset_index(), _p(cfg, OUTPUTS["deconvolve"][0]))
+    method = "posterior mean of per-sample proportions"
+    if props is None:
+        props = ab.div(ab.sum(axis=1), axis=0)
+        method = "ratio of posterior means (fallback)"
+    _write_table(
+        props.rename_axis("spot").reset_index().assign(proportion_method=method),
+        resolve(cfg, "tables", "c2l_proportions.csv"),
+    )
+    _write_table(q05.rename_axis("spot").reset_index(), resolve(cfg, "tables", "c2l_abundance_q05.csv"))
 
 
 def spatial(cfg: dict) -> None:
@@ -414,7 +510,15 @@ def spatial(cfg: dict) -> None:
     vis = ad.read_h5ad(_p(cfg, INPUTS["spatial"][0]))
     ab = pd.read_csv(_p(cfg, INPUTS["spatial"][1])).set_index("spot").loc[vis.obs_names]
     cell_types = list(ab.columns)
-    props = ab.div(ab.sum(axis=1), axis=0)
+    pfile = resolve(cfg, "tables", "c2l_proportions.csv")  # §3.12: posterior mean of per-sample proportions
+    props = (
+        pd.read_csv(pfile)
+        .drop(columns=["proportion_method"], errors="ignore")
+        .set_index("spot")
+        .loc[vis.obs_names]
+        if pfile.exists()
+        else ab.div(ab.sum(axis=1), axis=0)
+    )
     for c in cell_types:
         vis.obs[c] = props[c].values
     vis.obsm["c2l_abundance"] = ab.to_numpy()
@@ -431,41 +535,60 @@ def spatial(cfg: dict) -> None:
 def ccc(cfg: dict) -> None:
     import anndata as ad
 
-    from .ccc import by_sample, differential, spatial_bivariate, tensor_c2c
+    from .ccc import by_sample, differential, paired_loading_test, paired_units, tensor_c2c
 
+    ccfg = cfg["ccc"]
     adata = ad.read_h5ad(_p(cfg, INPUTS["ccc"][0]))
     adata.X = adata.layers["lognorm"]
     de_res = pd.read_csv(_p(cfg, INPUTS["ccc"][1]))
-    res = by_sample(adata, cfg["ccc"], "sample", cfg["project"]["n_jobs"])
+    res = by_sample(adata, ccfg, "sample", cfg["project"]["n_jobs"])
     _write_table(res, _p(cfg, OUTPUTS["ccc"][0]))
     # Each sub-analysis runs even if an earlier one fails, but any failure fails the step
     # (no silent skips — v2.0 run lost differential/tensor CCC to a swallowed API error).
     failures: dict[str, BaseException] = {}
     try:
         _write_table(
-            differential(adata, de_res[de_res.contrast == cfg["ccc"]["de_contrast"]], cfg["ccc"]),
+            differential(adata, de_res[de_res.contrast == ccfg["de_contrast"]], ccfg),
             resolve(cfg, "tables", "ccc_differential.csv"),
         )
     except Exception as exc:  # noqa: BLE001
         log.exception("differential CCC failed")
         failures["differential"] = exc
     try:
-        for name, f in tensor_c2c(adata, res, "sample", cfg["ccc"], cfg["project"]["seed"]).items():
+        # §3.12: tensor on the paired design — one slice per donor × condition (tumour, adjacent) of
+        # patients with
+        # both, LIANA re-run on those pooled units; condition tested within donor.
+        case, control = ccfg["tensor_contrast"]["case"], ccfg["tensor_contrast"]["control"]
+        unit = paired_units(adata.obs, case, control)
+        sub = adata[unit.notna().to_numpy()].copy()
+        sub.obs["donor_condition"] = unit.dropna().astype(str).to_numpy()
+        sub.obs["donor_condition"] = sub.obs["donor_condition"].astype("category")
+        log.info(
+            "tensor: %d cells, %d donor×condition units", sub.n_obs, sub.obs["donor_condition"].nunique()
+        )
+        unit_res = by_sample(sub, ccfg, "donor_condition", cfg["project"]["n_jobs"])
+        _write_table(unit_res, resolve(cfg, "tables", "ccc_by_donor_condition.csv"))
+        factors = tensor_c2c(sub, unit_res, "donor_condition", ccfg, cfg["project"]["seed"])
+        for name, f in factors.items():
             _write_table(
                 f.rename_axis("element").reset_index(),
                 resolve(cfg, "tables", f"ccc_tensor_{name.lower().replace(' ', '_')}.csv"),
             )
+        _write_table(paired_loading_test(factors, case, control), _p(cfg, OUTPUTS["ccc"][1]))
     except Exception as exc:  # noqa: BLE001
         log.exception("tensor-cell2cell failed")
         failures["tensor_c2c"] = exc
-    try:
-        vis = ad.read_h5ad(_p(cfg, INPUTS["ccc"][2]))
-        _write_table(spatial_bivariate(vis, cfg["ccc"]), resolve(cfg, "tables", "ccc_spatial_bivariate.csv"))
-    except Exception as exc:  # noqa: BLE001
-        log.exception("spatial bivariate CCC failed")
-        failures["spatial_bivariate"] = exc
     if failures:
         raise RuntimeError(f"ccc sub-analyses failed: {sorted(failures)} — see traceback(s) above")
+
+
+def ccc_spatial(cfg: dict) -> None:
+    import anndata as ad
+
+    from .ccc import spatial_bivariate
+
+    vis = ad.read_h5ad(_p(cfg, INPUTS["ccc_spatial"][0]))
+    _write_table(spatial_bivariate(vis, cfg["ccc"]), _p(cfg, OUTPUTS["ccc_spatial"][0]))
 
 
 def report(cfg: dict) -> None:

@@ -17,6 +17,8 @@ Steps
 5. **Gene space**: Ensembl IDs without version, intersection across atlases (C).
 6. **Labels**: Cell Ontology → harmonised label + compartment via ``config/label_crosswalk.csv`` (E).
 7. Stratified per-donor caps (separate for disease vs healthy donors) bound CPU cost.
+8. **Healthy = lung tissue from a cancer-free donor** (§3.13): allow-list on sample metadata
+   (``cohort.healthy_require``); lavage and tumour-adjacent surgery tissue are excluded, reason recorded.
 """
 
 from __future__ import annotations
@@ -55,12 +57,18 @@ def keys_overlap(k1: str, k2: str) -> bool:
 
 
 def age_years(obs: pd.DataFrame) -> pd.Series:
+    """Donor age in years, row by row: the numeric age column where present, else parsed from
+    ``development_stage`` (e.g. "64-year-old stage"). NaN = unknown.
+
+    §3.12: run 1/2 used the stage fallback only when the *whole* numeric column was empty, so rows with a
+    missing numeric age stayed NaN even when the stage string had the age.
+    """
+    stage = obs.get("development_stage", pd.Series(index=obs.index, dtype=str)).astype(str)
+    parsed = stage.str.extract(r"(\d+)-year-old")[0].astype(float)
     if "age_or_mean_of_age_range" in obs:
         a = pd.to_numeric(obs["age_or_mean_of_age_range"], errors="coerce")
-        if a.notna().any():
-            return a
-    stage = obs.get("development_stage", pd.Series(index=obs.index, dtype=str)).astype(str)
-    return stage.str.extract(r"(\d+)-year-old")[0].astype(float)
+        return a.fillna(parsed)
+    return parsed
 
 
 def sample_core_id(sample: str) -> str:
@@ -72,6 +80,46 @@ def sample_core_id(sample: str) -> str:
     last = str(sample).replace("_hg19", "").split("_")[-1]  # final token only: never batch/study numbers
     nums = re.findall(r"\d{3,}", last)
     return nums[-1] if nums else ""
+
+
+def mito_fraction(
+    X, var: pd.DataFrame, obs: pd.DataFrame, obs_col: str | None = None
+) -> tuple[np.ndarray, str]:
+    """Percent of counts from mitochondrially encoded genes, per cell (§3.10 #9).
+
+    Uses the atlas' own full raw matrix when it contains ``MT-`` genes (HLCA: 37). Otherwise falls back to an
+    author-computed obs column (LuCA: ``pct_counts_mito``, computed by Salcher et al. on their full matrix).
+    Returns (percent per cell, source label); NaN with source ``"none"`` if neither is available, so QC can
+    skip the mito rule explicitly instead of silently seeing 0 %.
+    """
+    names = var["feature_name"].astype(str) if "feature_name" in var else pd.Series(var.index.astype(str))
+    mt = np.flatnonzero(names.str.upper().str.startswith("MT-").to_numpy())
+    if len(mt):
+        tot = np.asarray(X.sum(axis=1)).ravel()
+        mtc = np.asarray(X[:, mt].sum(axis=1)).ravel()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            pct = np.where(tot > 0, 100.0 * mtc / tot, np.nan)
+        return pct.astype(np.float32), f"raw matrix ({len(mt)} MT- genes)"
+    if obs_col and obs_col in obs:
+        v = pd.to_numeric(obs[obs_col], errors="coerce").to_numpy(dtype=np.float32)
+        if np.nanmax(v) <= 1.0:  # stored as a fraction → percent
+            v = v * 100.0
+        return v, f"author obs column `{obs_col}`"
+    return np.full(len(obs), np.nan, dtype=np.float32), "none"
+
+
+def mask_studies_without_mito(
+    pct: np.ndarray, source: str, study: pd.Series
+) -> tuple[np.ndarray, np.ndarray]:
+    """Studies whose mito share is exactly 0 for every cell did not measure it (the depositors removed MT
+    reads, or the author column was filled with 0): mark them unavailable (NaN) instead of "0 %" (§3.12,
+    senior review). Returns (percent, per-cell source label)."""
+    pct = np.asarray(pct, dtype=np.float32).copy()
+    st = pd.Series(study.astype(str).to_numpy())
+    allzero = pd.Series(np.nan_to_num(pct, nan=0.0) == 0).groupby(st).transform("all").to_numpy()
+    src = np.where(allzero, f"unavailable (all 0 in study; {source})", source).astype(object)
+    pct[allzero] = np.nan
+    return pct, src
 
 
 def is_count_matrix(X, n: int = 2000) -> bool:
@@ -122,6 +170,19 @@ def assign_condition(obs: pd.DataFrame, acfg: dict, ccfg: dict, origin_lookup: d
     )
     cond[healthy & ~origin.isin(omap["exclude"])] = "healthy"
     return cond
+
+
+def healthy_source_ok(obs: pd.DataFrame, require: dict[str, list[str]]) -> pd.Series:
+    """True where a cell's sample metadata matches every allow-listed value (§3.13).
+
+    A column the atlas does not have cannot be checked, so no cell of that atlas qualifies.
+    """
+    ok = pd.Series(True, index=obs.index)
+    for col, allowed in require.items():
+        if col not in obs:
+            return pd.Series(False, index=obs.index)
+        ok &= obs[col].astype(str).isin([str(a) for a in allowed])
+    return ok
 
 
 def load_atlas_obs(name: str, acfg: dict, repo: Path) -> tuple[ad.AnnData, pd.DataFrame]:
@@ -190,18 +251,30 @@ def build_merged_cohort(
         o = o.copy()
         o["condition"] = assign_condition(o, acfg, ccfg, origin_lookup).values
         o["age_years"] = age_years(o).values
-        drop = (o["condition"] == "excluded") | (
-            (o["condition"] == "healthy") & (o["age_years"] < ccfg["healthy_min_age"])
+        healthy = o["condition"] == "healthy"
+        young = healthy & (o["age_years"] < ccfg["healthy_min_age"])
+        # §3.12: NaN < 45 is False, so unknown ages used to pass silently. Now an explicit policy.
+        unknown = healthy & o["age_years"].isna() & (ccfg.get("healthy_unknown_age", "keep") == "exclude")
+        reasons = pd.Series("", index=o.index)
+        reasons[o["condition"] == "excluded"] = "excluded origin (metastasis/effusion)"
+        # §3.13: healthy must be lung tissue from a person without cancer (allow-list, config healthy_require)
+        reasons[healthy & ~healthy_source_ok(o, ccfg.get("healthy_require", {}))] = (
+            "healthy sample not lung tissue from a cancer-free donor "
+            "(lavage, tumour-adjacent surgery or unrecorded)"
         )
-        for (st, cond), n in o[drop].groupby(["study", "condition"], observed=True).size().items():
+        reasons[young] = f"healthy donor age < {ccfg['healthy_min_age']}"
+        reasons[unknown] = "healthy donor age unknown"
+        drop = reasons != ""
+        for (st, reason), n in o[drop].assign(_r=reasons[drop]).groupby(["study", "_r"]).size().items():
             if n:
-                reason = (
-                    "excluded origin (metastasis/effusion)"
-                    if cond == "excluded"
-                    else f"healthy donor age < {ccfg['healthy_min_age']}"
-                )
                 excl.append(
-                    {"atlas": name, "study": st, "disease": cond, "reason": reason, "n_cells": int(n)}
+                    {
+                        "atlas": name,
+                        "study": st,
+                        "disease": "healthy" if "healthy" in reason else "excluded",
+                        "reason": reason,
+                        "n_cells": int(n),
+                    }
                 )
         sel[name] = o[~drop]
     exclusions = pd.DataFrame(excl)
@@ -269,6 +342,7 @@ def build_merged_cohort(
                     "n_cells_available": len(g),
                     "n_cells": int(g.index.isin(chosen).sum()),
                     "age_years": g["age_years"].iat[0],
+                    "age_known": bool(pd.notna(g["age_years"].iat[0])),
                 }
             )
     donors = pd.DataFrame(donor_rows)
@@ -296,8 +370,16 @@ def build_merged_cohort(
         var = a.raw.var if a.raw is not None else a.var
         ids = pd.Index(var.index.astype(str).str.split(".").str[0])
         col = ids.get_indexer(shared)
-        X = (a.raw.X if a.raw is not None else a.X)[pos]
-        X = sp.csr_matrix(X)[:, col].astype(np.float32)
+        Xfull = sp.csr_matrix((a.raw.X if a.raw is not None else a.X)[pos])
+        # §3.10 #9: mitochondrial fraction on the FULL gene set of each atlas, before the gene intersection
+        # (LuCA ships no MT- genes, so the shared gene space has none and QC would see 0 % everywhere).
+        pct_mt, mt_source = mito_fraction(
+            Xfull, var, obs_all[name].iloc[pos], atlases[name].get("mito_obs_col")
+        )
+        study_of = obs_all[name].iloc[pos]["study"]
+        pct_mt, mt_source = mask_studies_without_mito(pct_mt, mt_source, study_of)
+        X = Xfull[:, col].astype(np.float32)
+        del Xfull
         mats.append(X)
         ob = obs_all[name].iloc[pos]
         keep_cols = [
@@ -316,6 +398,8 @@ def build_merged_cohort(
         ]
         ob = ob[[c for c in keep_cols if c in ob]].astype(str).copy()
         ob["atlas"] = name
+        ob["pct_counts_mt"] = pct_mt
+        ob["mt_source"] = mt_source
         ob["condition"] = o.loc[ob.index, "condition"].values
         ob["age_years"] = o.loc[ob.index, "age_years"].values
         fine = atlases[name].get("fine_label_col")

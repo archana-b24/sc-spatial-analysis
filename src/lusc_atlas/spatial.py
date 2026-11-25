@@ -4,7 +4,8 @@ v1: Scanorama joint embedding + cosine "label transfer" assigned one cell type p
 three overlapping exploratory notebooks, none ran end-to-end; no spatial statistics (S10).
 
 v2:
-* Load Space Ranger output (official 10x 2.0.1 release, checksummed); also export a SpatialData zarr.
+* Load Space Ranger output (official 10x release, checksummed; run 3: the 10x FFPE lung squamous cell
+  carcinoma section, refused unless squamous markers are present); also export a SpatialData zarr.
 * **cell2location** (Kleshchevnikov 2022) — Bayesian deconvolution into per-spot cell-type *abundances*
   using reference signatures learned from the QC'd, CNV-annotated scRNA-seq (incl. a Malignant class).
   Runs in the isolated `c2l` pixi env (see `deconvolve_c2l` / scripts/run_c2l.py).
@@ -49,6 +50,47 @@ def write_spatialdata(raw_dir: Path, out_zarr: Path, sample_id: str) -> None:
         sdata.write(out_zarr, overwrite=True)
     except Exception as exc:  # noqa: BLE001 — export is a convenience artefact, never blocks analysis
         log.warning("SpatialData export skipped: %s", exc)
+
+
+def tissue_identity(adata: ad.AnnData, icfg: dict) -> pd.DataFrame:
+    """Marker check that the section is the tumour type we claim (§3.12). Raises if a required marker is
+    detected in fewer than ``min_spot_fraction`` of spots. Returns one row per reported marker."""
+    import scipy.sparse as sp
+
+    X = adata.layers["counts"] if "counts" in adata.layers else adata.X
+    X = sp.csr_matrix(X)
+    tot = np.asarray(X.sum(axis=1)).ravel()
+    rows = []
+    for g in dict.fromkeys([*icfg["required"], *icfg.get("report", [])]):
+        if g not in adata.var_names:
+            rows.append(
+                {
+                    "gene": g,
+                    "required": g in icfg["required"],
+                    "spot_fraction": np.nan,
+                    "mean_per_10k": np.nan,
+                }
+            )
+            continue
+        x = np.asarray(X[:, adata.var_names.get_loc(g)].todense()).ravel()
+        rows.append(
+            {
+                "gene": g,
+                "required": g in icfg["required"],
+                "spot_fraction": float((x > 0).mean()),
+                "mean_per_10k": float(
+                    np.mean(np.divide(x, tot, out=np.zeros_like(x, dtype=float), where=tot > 0)) * 1e4
+                ),
+            }
+        )
+    tab = pd.DataFrame(rows)
+    bad = tab[tab.required & ~(tab.spot_fraction >= icfg["min_spot_fraction"])]
+    if len(bad):
+        raise ValueError(
+            "Visium tissue-identity gate failed — required markers too rarely detected:\n" + bad.to_string()
+        )
+    log.info("tissue identity OK:\n%s", tab.to_string())
+    return tab
 
 
 def qc_and_cluster(adata: ad.AnnData, scfg: dict, seed: int = 0) -> pd.DataFrame:
