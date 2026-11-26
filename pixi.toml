@@ -1,0 +1,147 @@
+# Reproducible environments for lusc-atlas v2 (see DEVELOPMENT_LOG.md §2.3).
+# `pixi install --all` resolves every environment into pixi.lock (committed) → identical versions everywhere.
+#
+#   default  : analysis stack (Python 3.13 — required by pertpy 1.5)
+#   c2l      : cell2location only (pins older scvi-tools/pyro; isolated so it cannot break `default`)
+#   workflow : Snakemake orchestrator only; rules call `pixi run -e <env>` for their own environment
+#
+# Resolved conflicts (each one is a reason the layout looks like this):
+#   * pygpcca (← cellrank) hard-pins jinja2==3.0.3. conda-forge pytorch and snakemake both require
+#     jinja2>=3.1 → torch comes from the PyPI CPU index and snakemake lives in its own env.
+#   * cellcharter 0.3.9 needs scipy>=1.18; cellrank → pygam needs scipy<1.17 → cellcharter left unpinned
+#     so the solver selects the newest compatible release.
+
+[workspace]
+name = "lusc-atlas"
+version = "2.0.0.dev0"
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+# ---------------------------------------------------------------- default env
+[feature.main.dependencies]
+python = "3.13.*"
+# Everything else from PyPI on purpose: conda-forge C++ libs (igraph) need a newer libstdc++ than the
+# system one that PyPI wheels (torch) load first → "CXXABI_1.3.15 not found". Self-contained wheels avoid
+# mixing ABIs in one process.
+
+[feature.main.pypi-dependencies]
+lusc-atlas = { path = ".", editable = true }
+torch = { version = ">=2.5", index = "https://download.pytorch.org/whl/cpu" }   # CPU-only host
+# core
+numpy = "*"
+h5py = "*"
+igraph = "*"
+leidenalg = "*"
+harmonypy = "*"               # Harmony baseline in the integration benchmark
+transformers = "*"            # Geneformer (BERT) inference for the foundation-model benchmark candidate
+safetensors = "*"             # model weights without pickle
+huggingface-hub = "*"
+pandas = ">=2.3,<3"            # pandas 3 copy-on-write/str-dtype changes not yet validated across scverse
+anndata = ">=0.13"
+scanpy = { version = ">=1.12.5", extras = ["skmisc"] }
+cellxgene-census = ">=1.18"
+session-info2 = "*"
+pyyaml = "*"
+# modelling
+scvi-tools = ">=1.5.2"
+scib-metrics = "*"
+infercnvpy = ">=0.6.1"
+pydeseq2 = ">=0.5.4"
+decoupler = ">=2.3.1"
+omnipath = "*"
+gseapy = ">=1.3"
+pertpy = { version = ">=1.5", extras = ["jax"] }   # [jax] → numpyro/flax/optax: required by scCODA (Sccoda); plain pertpy imports but fails at Sccoda()
+cellrank = ">=2.3.3"
+palantir = ">=1.4.6"
+# spatial
+squidpy = ">=1.8.4"
+spatialdata = ">=0.8"
+spatialdata-io = ">=0.7.1"
+spatialdata-plot = ">=0.4.3"
+cellcharter = ">=0.3"
+# communication
+liana = ">=2.1.1"
+cell2cell = ">=0.9"
+mofapy2 = "*"
+# tooling
+tabulate = "*"  # pandas.DataFrame.to_markdown in report
+papermill = "*"
+ipykernel = "*"
+jupyterlab = "*"
+nbstripout = "*"
+pre-commit = "*"
+pytest = "*"
+ruff = "*"
+
+# ------------------------------------------------------------ cell2location env
+[feature.c2l.dependencies]
+python = "3.12.*"
+h5py = "*"
+
+[feature.c2l.pypi-dependencies]
+lusc-atlas = { path = ".", editable = true }
+torch = { version = ">=2.3", index = "https://download.pytorch.org/whl/cpu" }
+cell2location = ">=0.1.5"
+scvi-tools = ">=1.3,<1.4"     # cell2location declares no upper bound but breaks on scvi-tools 1.5
+pyro-ppl = "<1.9.2"           # 1.9.2 removed pyro.infer.autoguide.utils.deep_getattr, imported by cell2location
+pyyaml = "*"
+
+# ----------------------------------------------------------------- workflow env
+[feature.workflow.dependencies]
+python = "3.13.*"
+snakemake = ">=9.27"
+pyyaml = "*"
+
+
+# --------------------------------------------------------------- dashboard env
+# Results dashboard (docs/ROADMAP.md §6): the `export` step (pipeline outputs → DuckDB) and the
+# Streamlit app. Kept separate so web dependencies never touch the analysis lock; app/requirements.txt
+# mirrors the app-only subset for Hugging Face Spaces.
+[feature.dashboard.dependencies]
+python = "3.12.*"
+
+[feature.dashboard.pypi-dependencies]
+lusc-atlas = { path = ".", editable = true }
+pandas = ">=2.3,<3"
+numpy = "*"
+scipy = "*"
+h5py = "*"
+anndata = ">=0.11"
+pyyaml = "*"
+pyarrow = "*"
+duckdb = ">=1.1"
+streamlit = ">=1.40"
+plotly = ">=5.24"
+pillow = "*"
+pytest = "*"
+# agent (docs/design/A_agentic_research.md): optional LLM providers + MCP server. Imported lazily, so the
+# dashboard runs without them and without any API key.
+anthropic = "*"   # Claude (default provider)
+openai = "*"      # OpenAI-compatible client → NVIDIA NIM / build.nvidia.com (Nemotron)
+mcp = "*"         # Model Context Protocol server exposing the same atlas tools
+huggingface-hub = "*"  # app/lib/db.py fetches the snapshot from an HF Dataset when deployed; publish_dataset.sh
+
+[environments]
+default = { features = ["main"] }
+c2l = { features = ["c2l"], no-default-feature = true }
+workflow = { features = ["workflow"], no-default-feature = true }
+dashboard = { features = ["dashboard"], no-default-feature = true }
+
+[tasks]
+fetch = "python scripts/run_all.py --only fetch"
+run-all = "python scripts/run_all.py"
+test = "pytest -q"
+lint = "ruff check src scripts tests app"
+
+[feature.workflow.tasks]
+smk = "snakemake -s workflow/Snakefile --cores 16"
+smk-dry = "snakemake -s workflow/Snakefile -n"
+
+[feature.dashboard.tasks]
+export = "lusc-atlas export"
+app = "streamlit run app/streamlit_app.py --server.headless true --server.port 8501"
+# agent / MCP (docs/design/README.md)
+mcp = "python -m lusc_atlas.agent.mcp_server"             # MCP stdio server over the same read-only tools
+# free hosting only (docs/design/C_dashboard_hosting.md "Cost: $0"): Streamlit Community Cloud + public HF Dataset
+cloud-dry-run = "bash scripts/cloud_dry_run.sh"           # clean clone + fresh py3.12 venv + secrets + offline HF fetch
+publish-dataset = "bash scripts/publish_dataset.sh"       # YOU run it: DB → public HF Dataset (needs HF_TOKEN; never a Space)

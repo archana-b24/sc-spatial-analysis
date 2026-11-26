@@ -1,0 +1,23 @@
+name: ci
+on:
+  push:
+    branches: [main, v2-dev]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.9.2
+        with:
+          environments: default workflow
+          frozen: true            # fail if pixi.lock is out of date
+      - name: Lint
+        run: pixi run lint
+      - name: Unit tests
+        run: pixi run test
+      - name: Snakemake DAG builds
+        run: pixi run -e workflow smk-dry
+      - name: run_all plan matches
+        run: pixi run python scripts/run_all.py --dry-run

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lusc-atlas"
+version = "2.0.0.dev0"
+description = "Reproducible single-cell + spatial analysis of lung squamous cell carcinoma (LUSC) progression"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+authors = [
+  { name = "Archana Balasubramanian" },
+  { name = "Shivaramakrishna Srinivasan" },
+  { name = "Aaryan Sharma" },
+  { name = "Aathira Sarath Chandran" },
+  { name = "Hersh Gupta" },
+]
+# Exact pins live in envs/ lockfiles; ranges here only guard API compatibility.
+dependencies = []
+
+[project.scripts]
+lusc-atlas = "lusc_atlas.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# dashboard pages are mostly reader-facing prose and SQL; wrapping those strings at 110 hurts readability
+"app/views/*.py" = ["E501"]
+"app/lib/explain.py" = ["E501"]   # reader-facing interpretation sentences (same reason as app/views)
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

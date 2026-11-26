@@ -1,0 +1,49 @@
+# lusc-atlas v2 — Snakemake workflow
+#
+#   pixi run -e workflow smk-dry            # show the DAG plan
+#   pixi run -e workflow smk                # run everything (16 cores)
+#   pixi run -e workflow snakemake -s workflow/Snakefile --cores 16 results/tables/de_pseudobulk.csv
+#
+# Rules are GENERATED from lusc_atlas.steps (INPUTS / OUTPUTS / ENV), the same declarations run_all.py
+# uses — the two runners cannot drift apart. Each rule runs the step in its own pixi environment.
+
+import sys
+from pathlib import Path
+
+REPO = Path(workflow.basedir).parent
+sys.path.insert(0, str(REPO / "src"))
+from lusc_atlas.steps import ENV, INPUTS, ORDER, OUTPUTS  # noqa: E402
+
+configfile: str(REPO / "config" / "config.yaml")
+workdir: str(REPO)
+
+# heavier steps get all cores; light ones share
+THREADS = {"fm_embed": 16, "integrate": 16, "qc": 16, "cnv": 16, "deconvolve": 16, "ccc": 16, "spatial": 16, "de": 8}
+MEM_MB = {"select": 100_000, "integrate": 64_000, "qc": 48_000, "cnv": 64_000, "deconvolve": 48_000}
+
+
+rule all:
+    input:
+        OUTPUTS["report"],
+        OUTPUTS["export"],
+
+
+for _step in ORDER:
+
+    rule:
+        name:
+            _step
+        input:
+            INPUTS[_step],
+        output:
+            OUTPUTS[_step],
+        log:
+            f"logs/snakemake/{_step}.log",
+        threads: THREADS.get(_step, 4)
+        resources:
+            mem_mb=MEM_MB.get(_step, 16_000),
+        params:
+            env=ENV.get(_step, "default"),
+            step=_step,
+        shell:
+            "pixi run --manifest-path {REPO}/pixi.toml -e {params.env} lusc-atlas {params.step} > {log} 2>&1"

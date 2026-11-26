@@ -1,0 +1,60 @@
+cell_type_ontology_term_id,cell_type,harmonised_label,compartment,note
+CL:0002633,respiratory basal cell,Basal,Epithelial,
+CL:4030023,respiratory tract hillock cell,Basal,Epithelial,hillock = KRT13+ basal-adjacent state; merged to Basal at harmonised level (fine label kept)
+CL:0002062,pulmonary alveolar type 1 cell,AT1,Epithelial,
+CL:0002063,pulmonary alveolar type 2 cell,AT2,Epithelial,
+CL:0000158,club cell,Secretory,Epithelial,
+CL:0000319,mucus secreting cell,Secretory,Epithelial,
+CL:0000313,serous secreting cell,Secretory,Epithelial,
+CL:0019001,tracheobronchial serous cell,Secretory,Epithelial,
+CL:0019003,tracheobronchial goblet cell,Secretory,Epithelial,
+CL:1000312,bronchial goblet cell,Secretory,Epithelial,
+CL:0002480,nasal mucosa goblet cell,Secretory,Epithelial,
+CL:0000622,acinar cell,Secretory,Epithelial,submucosal gland
+CL:0002145,multiciliated columnar cell of tracheobronchial tree,Multiciliated,Epithelial,
+CL:0005012,multiciliated epithelial cell,Multiciliated,Epithelial,LuCA uses the parent term
+CL:0005006,ionocyte,Rare epithelial,Epithelial,
+CL:0002075,brush cell of tracheobronchial tree,Rare epithelial,Epithelial,
+CL:1000223,pulmonary neuroendocrine cell,Rare epithelial,Epithelial,
+CL:0001064,malignant cell,Unknown,Epithelial,LuCA author call; NOT used as a label — kept only to validate our CNV calls (concordance table)
+CL:0000082,epithelial cell of lung,Unknown,Epithelial,LuCA generic epithelial (no basal/club split) → unlabeled for scANVI
+CL:0000322,pulmonary alveolar epithelial cell,Unknown,Epithelial,HLCA AT0/pre-TB states parent term → unlabeled
+CL:0002632,epithelial cell of lower respiratory tract,Unknown,Epithelial,HLCA unresolved airway epithelium → unlabeled
+CL:0002144,capillary endothelial cell,EC capillary,Endothelial,
+CL:1001568,pulmonary artery endothelial cell,EC arterial,Endothelial,
+CL:0002543,vein endothelial cell,EC venous,Endothelial,
+CL:0002138,endothelial cell of lymphatic vessel,EC lymphatic,Endothelial,
+CL:0000057,fibroblast,Fibroblast,Stroma,
+CL:0002553,fibroblast of lung,Fibroblast,Stroma,LuCA parent term
+CL:4028004,alveolar type 1 fibroblast cell,Fibroblast,Stroma,HLCA subtype (alveolar fibroblast)
+CL:4028006,alveolar adventitial fibroblast,Fibroblast,Stroma,HLCA subtype
+CL:2000093,bronchus fibroblast of lung,Fibroblast,Stroma,
+CL:0000499,stromal cell,Fibroblast,Stroma,generic stromal → fibroblast at harmonised level
+CL:0000186,myofibroblast cell,Smooth muscle & pericyte,Stroma,
+CL:0000192,smooth muscle cell,Smooth muscle & pericyte,Stroma,
+CL:0019019,tracheobronchial smooth muscle cell,Smooth muscle & pericyte,Stroma,
+CL:0000669,pericyte,Smooth muscle & pericyte,Stroma,LuCA parent term
+CL:0009089,lung pericyte,Smooth muscle & pericyte,Stroma,
+CL:0000077,mesothelial cell,Mesothelial,Stroma,
+CL:0000583,alveolar macrophage,Macrophage,Immune,HLCA fine subtype; LuCA does not split macrophages
+CL:0000235,macrophage,Macrophage,Immune,LuCA parent term
+CL:0000861,elicited macrophage,Macrophage,Immune,HLCA: monocyte-derived / interstitial
+CL:1001603,lung macrophage,Macrophage,Immune,
+CL:0000860,classical monocyte,Monocyte classical,Immune,
+CL:0000875,non-classical monocyte,Monocyte non-classical,Immune,
+CL:0000451,dendritic cell,cDC,Immune,
+CL:0000990,conventional dendritic cell,cDC,Immune,
+CL:0002399,CD1c-positive myeloid dendritic cell,cDC,Immune,cDC2
+CL:0000784,plasmacytoid dendritic cell,pDC,Immune,
+CL:0000775,neutrophil,Neutrophil,Immune,"LuCA only (HLCA dissociation protocols largely lose neutrophils) — expected atlas-specific, not a batch artefact"
+CL:0000097,mast cell,Mast,Immune,
+CL:0000763,myeloid cell,Unknown,Immune,generic → unlabeled
+CL:0000624,"CD4-positive, alpha-beta T cell",CD4 T,Immune,
+CL:0000815,regulatory T cell,CD4 T,Immune,"LuCA splits Tregs, HLCA does not → merged at harmonised level (fine label kept)"
+CL:0000625,"CD8-positive, alpha-beta T cell",CD8 T,Immune,
+CL:0000084,T cell,Unknown,Immune,generic → unlabeled
+CL:0000623,natural killer cell,NK,Immune,
+CL:0000236,B cell,B,Immune,
+CL:0000786,plasma cell,Plasma,Immune,
+CL:0000037,hematopoietic stem cell,Unknown,Immune,
+unknown,unknown,Unknown,Unknown,

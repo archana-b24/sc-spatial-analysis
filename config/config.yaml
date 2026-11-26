@@ -1,0 +1,357 @@
+# =============================================================================
+# lusc-atlas v2 — single source of truth for paths, data versions and parameters
+# Every value that changes a result lives here; code holds no magic numbers.
+# Rationale for each choice: DEVELOPMENT_LOG.md §3.
+# =============================================================================
+
+project:
+  name: lusc-atlas
+  seed: 0                      # global RNG seed (numpy, torch, scvi, leiden)
+  n_jobs: 16
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  tables: results/tables
+  figures: results/figures
+  reports: results/reports
+
+# -----------------------------------------------------------------------------
+# 1. Data — pinned versions + checksums (DEVELOPMENT_LOG §2.2)
+# -----------------------------------------------------------------------------
+data:
+  census:
+    version: "2025-11-08"            # pinned stable/LTS Census release — never "latest"
+
+  # Two atlases (DEVELOPMENT_LOG §3.2–3.3). Column names are atlas-specific; everything downstream uses
+  # the harmonised names (atlas, study, sample, donor_id, condition, harmonised_label, compartment).
+  atlases:
+    HLCA:
+      dataset_id: "9f222629-9e39-47d0-b83f-e08d610c7479"   # HLCA core+extended (Sikkema 2023)
+      file: data/raw/hlca/hlca_full_census-2025-11-08.h5ad
+      study_col: study
+      sample_col: sample
+      origin_col: null               # HLCA has no tumour/adjacent annotation → imported by sample ID if possible
+      fine_label_col: ann_finest_level
+    LuCA:
+      dataset_id: "1e6a6ef9-7ec9-4c90-bbfb-2ad3c3165fd1"   # LuCA extended (Salcher 2022)
+      file: data/raw/luca/luca_extended_census-2025-11-08.h5ad
+      study_col: study
+      sample_col: sample
+      origin_col: origin
+      fine_label_col: ann_fine
+      # §3.10 #9: LuCA's matrix has no MT- genes; use the authors' per-cell mito % (full gene set) instead
+      mito_obs_col: pct_counts_mito
+
+  cohort:
+    tumour_disease_ontology: "MONDO:0005097"   # squamous cell lung carcinoma
+    normal_disease: "normal"
+    tissues: ["lung", "lung parenchyma"]       # primary lung only (no lymph node / effusion / nose); CELLxGENE
+                                                # labels lavage "lung" too → healthy_require removes it
+    origin_map:                                 # sample origin → condition
+      tumour: [tumor_primary, tumor_edge, tumor_middle, tumor_core]
+      adjacent_normal: [normal_adjacent]
+      exclude: [tumor_metastasis, effusion, lymph_node, nan]
+    exclude_assays: [Smart-seq2]                # non-UMI read counts: not comparable with UMI counts in NB models
+    healthy_min_age: 45                         # age-match healthy donors to LUSC patients
+    # §3.13: "healthy" = lung TISSUE from people WITHOUT cancer. Allow-list on the atlas' own sample metadata;
+    # a healthy cell must match every listed column (an atlas without a column cannot qualify). Removes
+    # bronchoalveolar lavage (airway cells, not tissue) and HLCA "Healthy (tumor adjacent)" surgery tissue
+    # (cancer patients; same kind of tissue as our adjacent controls, but unpaired).
+    healthy_require:
+      lung_condition: [Healthy]
+      tissue_sampling_method: [donor_lung, donor_lung_cryopreserved, lung_explant, autopsy, autopsy_cryopreserved]
+    # §3.12: healthy donors with no recorded age (59 of 111 in run 2, before the §3.13 allow-list: whole HLCA studies report "unknown") are
+    # kept and flagged (`age_known` in cohort_donors) — healthy donors enter no primary inference (§3.12 merge
+    # design), and excluding them would remove five whole studies from the reference. Set to `exclude` to drop.
+    healthy_unknown_age: keep
+    healthy_max_cells_per_donor: 1000           # healthy reference is large (≈1 M cells) → light cap
+    disease_max_cells_per_donor: 8000           # keep nearly all LUSC-patient cells
+    prefer_atlas_on_overlap: LuCA               # if a study survives dedup in both atlases, keep LuCA's copy
+
+  gene_positions:                                          # for inferCNV (chromosome ordering)
+    url: https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_44/gencode.v44.basic.annotation.gtf.gz
+
+  visium:
+    # §3.12 (run 3): the 2.0.1 `CytAssist_11mm_FFPE_Human_Lung_Cancer` section used in runs 1–2 is a
+    # NEUROENDOCRINE carcinoma (10x metadata; CHGA ≈ 10 % of every spot's library, KRT5/TP63/SOX2 ≈ 0). This is
+    # 10x's squamous cell carcinoma section (Space Ranger 2.0.0, 3,858 spots, CC BY 4.0) — the one v1 used.
+    sample_id: CytAssist_FFPE_Human_Lung_Squamous_Cell_Carcinoma
+    diagnosis: lung squamous cell carcinoma (10x Genomics dataset metadata)
+    base_url: https://cf.10xgenomics.com/samples/spatial-exp/2.0.0/CytAssist_FFPE_Human_Lung_Squamous_Cell_Carcinoma/CytAssist_FFPE_Human_Lung_Squamous_Cell_Carcinoma
+    files:
+      filtered_feature_bc_matrix.h5:
+        url_suffix: _filtered_feature_bc_matrix.h5
+        sha256: 2a50f60f7ecd86cb9fbb9d55cb89f9c7d938b3951f082b01bc81acf036642cbf
+      spatial.tar.gz:
+        url_suffix: _spatial.tar.gz
+        sha256: cd636c52be5493031d3f58e56162906acdec16ab711f6d8cd05d18d315cc76e0
+        extract: true
+    # Tissue-identity gate (spatial_prep fails if not met): the squamous programme must be present
+    identity_markers:
+      required: [KRT5, TP63, SOX2]          # LUSC lineage markers (basal/squamous)
+      min_spot_fraction: 0.3               # each detected (≥ 1 UMI) in ≥ 30 % of spots
+      report: [KRT5, KRT6A, KRT17, TP63, SOX2, DSG3, NKX2-1, NAPSA, SFTPC, CHGA, SYP, INSM1, PTPRC, COL1A1]
+
+# -----------------------------------------------------------------------------
+# 2. QC & doublets (Heumos 2023 sc-best-practices) — computed PER SAMPLE
+# -----------------------------------------------------------------------------
+qc:
+  min_genes: 200
+  min_cells_per_gene: 10
+  mad_log_counts: 5
+  mad_log_genes: 5
+  mad_pct_top20: 5
+  # Mito (§3.10 #9 + §3.12): pct_counts_mt comes from `select` (full gene set; MT- genes are not in the merged
+  # gene space). Upper tail only, judged within sample × compartment (≥ mito_min_group cells, else per sample);
+  # lenient because both atlases were already mito-filtered by their authors (LuCA ≤ 30 %).
+  mad_pct_mt: 5
+  mad_floor_pct_mt: 1.0             # MAD floored at 1 percentage point (a tight distribution ≠ many outliers)
+  max_pct_mt: 25                     # hard ceiling, also applied where a sample has no mito signal (MAD 0)
+  mito_min_group: 50
+  min_cells_per_sample: 200          # samples smaller than this cannot support per-sample QC/doublets
+  doublets:
+    scrublet: true
+    max_called_fraction: 0.25        # Scrublet auto threshold calling > 25 % of a sample = threshold failure …
+    expected_rate_per_1000: 0.008    # … then the top (0.8 % per 1,000 cells) of doublet scores are called …
+    expected_rate_cap: 0.10          # … capped at 10 %
+    solo: false                      # run 3: off — SOLO called 17 % (argmax of a balanced classifier; §3.12)
+    solo_max_epochs: 200
+
+# -----------------------------------------------------------------------------
+# 3. Integration (scVI; Lopez 2018, Gayoso 2022)
+# -----------------------------------------------------------------------------
+integration:
+  n_hvg: 3000
+  hvg_flavor: seurat_v3              # on raw counts
+  hvg_batch_key: study               # HVGs batch-aware per study (per-sample LOESS is singular for small samples)
+  batch_key: sample                  # finest technical unit (§3.3 F) — NOT atlas
+  categorical_covariates: [study, assay]
+  n_latent: 30
+  n_layers: 2
+  max_epochs: null                   # null → scvi-tools heuristic (scales epochs with dataset size)
+  early_stopping: true
+  scanvi_max_epochs: 20
+  scanvi_samples_per_label: 100
+  run_sysvi: true
+  sysvi_system_key: atlas            # sysVI "system" = the substantial batch effect (HLCA vs LuCA)
+  sysvi_cycle_weight: 2
+  benchmark_batch_key: study
+  benchmark_n_cells: 20000         # shared subsample for ALL candidates (Geneformer CPU ≈ 0.5 s/cell → ~3 h)
+  purity_tolerance: 0.05             # over-correction guard: kNN label purity may drop ≤ 0.05 vs PCA
+  leiden_resolution: 1.0
+  # --- transfer learning candidate: scArches surgery onto the published HLCA scANVI model (§3.3 G)
+  transfer:
+    enabled: true
+    reference_dir: data/raw/hlca_model/HLCA_reference_model          # Zenodo 7599104 (HLCA_reference_model.zip)
+    reference_zip_url: https://zenodo.org/api/records/7599104/files/HLCA_reference_model.zip/content
+    reference_zip_sha256: a7cd60f4342292b3cba54545bcd8a34decdc8e6b82163f009273d543e7e3910e
+    converted_dir: data/interim/hlca_reference_scvi1x
+    surgery_epochs: 50               # HLCA paper used 500 on GPU; frozen weights converge much earlier
+    sha256:                          # loaded only through lusc_atlas.safe_load (restricted unpickler)
+      attr.pkl: 2954c8ce7508d98fff37d70fc72709b41f0b55a18b81464bac3354ccab5b5284
+      model_params.pt: e19438f02b67feff36fdbf118d364ac06717f9090c2dcead747d1e63b72f97c9
+      var_names.csv: 91a100529b5ce6abd5d813f26cdc826fb751d91c50d25e091e38b132dd9de666
+  # --- foundation-model candidate: zero-shot Geneformer (benchmark subsample only) (§3.3 G)
+  foundation_model:
+    enabled: true
+    repo_id: ctheodoris/Geneformer
+    revision: 1f7fbae4e469a5f4f1af8c111a529cfe1b3829f5   # pinned commit
+    model: Geneformer-V2-104M_CLcancer                     # cancer continual-pretrained V2
+    local_dir: data/raw/geneformer
+    input_size: 4096
+    batch_size: 8
+    token_dict: geneformer/token_dictionary_gc104M.pkl
+    median_dict: geneformer/gene_median_dictionary_gc104M.pkl
+    files:
+      Geneformer-V2-104M_CLcancer/config.json: b3e1f3e71b1df7238f0f1d6dda258d560ea84e5e9698351a1588cfad06321e18
+      Geneformer-V2-104M_CLcancer/model.safetensors: 827738139bfed4bafa9d1f3df7c6146da2e3b85f7225076adc32c6eda0ba4357
+      geneformer/token_dictionary_gc104M.pkl: 67c445f4385127adfc48dcc072320cd65d6822829bf27dd38070e6e787bc597f
+      geneformer/gene_median_dictionary_gc104M.pkl: a51c53f6a771d64508dfaf61529df70e394c53bd20856926117ae5d641a24bf5
+  harmonised_label_key: harmonised_label   # from config/label_crosswalk.csv
+  label_key: harmonised_label
+  coarse_label_key: harmonised_label
+
+# -----------------------------------------------------------------------------
+# 4. Malignant-cell calling (infercnvpy; Tirosh 2016)
+# -----------------------------------------------------------------------------
+cnv:
+  # §3.12 (run 3): per-sample two-axis calling with a held-out, same-sample null (src/lusc_atlas/cnv.py docstring)
+  compartment_key: compartment       # from the label crosswalk
+  label_key: harmonised_label
+  epithelial_compartment: Epithelial
+  reference_compartments: [Immune, Endothelial, Stroma]   # diploid reference, from the SAME sample
+  window_size: 250
+  step: 10
+  min_epithelial: 50                 # fewer epithelial cells in a sample → "unresolved", no calls
+  # units = patient × tissue (a patient's tumour regions pooled; senior review B4)
+  min_reference: 300                 # fewer reference cells in a unit → pool reference within the study
+  max_ref_cells_per_sample: 3000
+  heldout_fraction: 0.2              # reference cells held out as pseudo-query → empirical null …
+  min_heldout: 100                   # … at least 100 of them, so the 99th percentile is not just the maximum
+  # PRE-REGISTERED acceptance gate (written down before run 3 started; senior review B4). Failure does not stop
+  # the pipeline; the dashboard flags every result that depends on malignant calls.
+  acceptance:
+    max_adjacent_call_rate: 0.05     # ≤ 5 % of adjacent-normal epithelium called (expected ≈ 1 % from a q99 null)
+    min_donors_with_calls: 10        # calls in ≥ 10 patients (runs 1–2: 87 % of calls from 3 patients)
+    # plus: called cells show the LUSC hallmarks on average — chr3q gain (> 0) and chr3p loss (< 0)
+  null_quantile: 0.99                # threshold on BOTH axes = 99th percentile of the held-out null
+  consensus_top_fraction: 0.10       # consensus tumour profile from the top 10 % (cross-fitted halves)
+  # window mask: normal epithelium (healthy squamous-lineage + adjacent-normal epithelium) vs same-sample reference
+  mask_normal_labels: [Basal]        # healthy-donor squamous-lineage label(s) in the harmonised crosswalk
+  mask_max_cells: 6000
+  mask_nmads: 3                      # mask windows with |mean signal| > median + 3 MAD across windows
+  tumour_conditions: [tumour, tumour_region_unknown]      # malignant calls only allowed here
+  check_arms: ["chr3q", "chr3p", "chr5p"]                # LUSC hallmarks (3q gain SOX2/TP63, 3p loss, 5p gain)
+  author_label_check: "malignant cell"   # LuCA author label → concordance with our CNV calls
+  # author-"malignant" cells in tumour samples that are not CNV-called get their own group instead of `Unknown`
+  cnv_low_label: "Tumour epithelial (CNV-low)"
+
+# -----------------------------------------------------------------------------
+# 5. Differential expression, pathways, abundance (Squair 2021; Muzellec 2023)
+# -----------------------------------------------------------------------------
+de:
+  # §3.12: one pseudobulk unit per donor × condition (multi-region tumour samples of a patient are summed, so each
+  # patient counts once per tissue). `donor_condition` is built by the de step.
+  pseudobulk_sample_key: donor_condition
+  group_key: de_group                # harmonised labels + "Malignant" + CNV-low tumour group (set by the CNV step)
+  # §3.12: `tissue_type` (set by the cnv step) = condition with region-unknown tumour counted as tumour tissue
+  condition_key: tissue_type
+  min_cells_per_pseudobulk: 10
+  min_samples_per_condition: 3       # unpaired contrasts: ≥ 3 donor units per condition
+  # §3.12 paired eligibility (senior review): "primary" needs ≥ 6 pairs AND ≥ 2 studies with ≥ 2 pairs each;
+  # ≥ 3 pairs → "descriptive" (fitted, shown, never headlined); fewer → not fitted
+  min_paired_donors: 6
+  min_paired_studies: 2
+  min_descriptive_donors: 3
+  ambient_expanding_source_ratio: 3.0  # export: also suspect if the source type expands in tumour (composition)
+  lfc_threshold: 0.585               # thresholded test H0: |log2FC| ≤ log2(1.5) (PyDESeq2 lfc_null, greaterAbs)
+  loso_major_fraction: 0.25          # a study holding ≥ 25 % of the pairs is "major": its LOSO refit must agree
+  loso_alpha: 0.1
+  sign_flip_flag_frac: 0.03          # §3.13: paired sign-flip null; a type averaging > 3 % of genes at p < 0.01 is flagged
+  ambient_ratio: 10                  # gene ≥ 10× higher in another cell type → ambient/contamination suspect
+  exclude_groups: [Unknown]          # a mixed bucket of unlabelled cells: never tested
+  # §3.12: subtypes whose mix differs between tumour and adjacent tissue get their own group (author fine labels;
+  # cells with an unlisted fine label keep the parent). HLCA does not split Tregs, so HLCA CD4 T → conventional.
+  refine_groups:
+    Macrophage:
+      "Macrophage (alveolar)": [Alveolar macrophages, Alveolar Mph CCL3+, Alveolar Mph proliferating, Macrophage alveolar]
+      "Macrophage (monocyte-derived)": [Monocyte-derived Mph, Interstitial Mph perivascular, Macrophage]
+    CD4 T:
+      "CD4 T (regulatory)": [T cell regulatory]
+      "CD4 T (conventional)": [CD4 T cells, T cell CD4, T cell CD4 dividing]
+  # groups that exist only in tumour tissue: never tested in case-vs-control contrasts (no counterpart)
+  tumour_only_groups: [Malignant, "Tumour epithelial (CNV-low)", "Tumour epithelial (CNV unresolved)"]
+  # each is compared with healthy-donor Basal pseudobulks (unpaired; hypothesis-generating, atlas-confounded)
+  vs_healthy_basal:
+    malignant_vs_healthy_basal: Malignant
+    cnvlow_tumour_vs_healthy_basal: "Tumour epithelial (CNV-low)"
+  contrasts:
+    # PRIMARY: paired within patient → what is constant within a patient cancels (genotype, age, sex, smoking, study,
+    # atlas, chemistry). Tissue-specific handling (dissociation, blood, ambient RNA) does not (§3.13).
+    # Checked by leave-one-study-out refits + per-study effects (de_loso.csv, de_per_study.csv; §3.12).
+    paired_tumour_vs_adjacent:
+      {case: tumour, control: adjacent_normal, paired: true, inference: "primary (paired within patient)"}
+    # EXPLORATORY: healthy donors are all HLCA, tumours almost all LuCA, and no study has both → study cannot
+    # enter the model; a difference here is tumour + atlas + study + protocol. Shown only with `supported_by_paired`.
+    tumour_vs_healthy:
+      {case: tumour, control: healthy, paired: false, inference: "exploratory (atlas-confounded)"}
+    # DECOMPOSITION TERM (not a negative control; senior review): tumour − healthy = (tumour − adjacent) +
+    # (adjacent − healthy). This second term mixes atlas, study and chemistry with real biology (field
+    # cancerisation, smoking, age). The technical floor comes from de_cross_study_null.csv instead.
+    adjacent_vs_healthy:
+      {case: adjacent_normal, control: healthy, paired: false, inference: "decomposition term (atlas + study + field effect)"}
+  alpha: 0.05
+  pathways:
+    progeny_top: 500
+    collectri: true
+    hallmark: true
+abundance:
+  # §3.12 (run 3; senior review): scCODA on all 215 samples (unpaired, sorting protocols differing by study,
+  # tumour-only types diluting the rest) is replaced by PAIRED tests within a compartment on donor × tissue units.
+  group_key: analysis_group          # tumour epithelium merged; macrophage / CD4 T subtypes split
+  exclude_groups: [Unknown]
+  paired_tests:
+    # only the immune compartment has enough cells per unit in both tissues (adjacent epithelium/stroma are tiny,
+    # endothelium is one CD31-enriched study) → the others are shown descriptively (composition_units.csv)
+    - {compartment: Immune, case: tumour, control: adjacent_normal, min_compartment_cells: 200, min_type_presence: 0.5}
+  alpha: 0.05
+  milo_k: 30
+  milo_prop: 0.1
+  # paired contrast on donor × tissue units of patients with both tissues (like the primary DE)
+  milo_contrast: {case: tumour, control: adjacent_normal, paired: true}
+  milo_spatial_fdr: 0.1
+
+# -----------------------------------------------------------------------------
+# 6. Trajectory (CellRank 2 + Palantir; Weiler 2024, Setty 2019)
+# -----------------------------------------------------------------------------
+trajectory:
+  label_key: harmonised_label
+  root_label: Basal                  # healthy-donor basal cells
+  include_labels: [Basal, Malignant]
+  n_components: 10
+  num_waypoints: 1200
+  n_macrostates: 3
+
+# -----------------------------------------------------------------------------
+# 7. Spatial (SpatialData, cell2location, squidpy, CellCharter)
+# -----------------------------------------------------------------------------
+spatial:
+  min_counts: 500
+  min_genes: 250
+  max_pct_mt: 25
+  min_cells_per_gene: 10
+  c2l:
+    reference_label: analysis_group  # §3.12: de_group with Malignant + CNV-low merged into "Tumour epithelium"
+    ref_max_epochs: 250
+    max_epochs: 30000
+    n_cells_per_location: 10         # FFPE lung tumour, 55 µm spots (cell2location tutorial guidance)
+    detection_alpha: 20
+    max_ref_cells_per_label: 3000
+    # §3.10 #3: reference labels with fewer cells than this (in the full atlas, before subsampling) are merged
+    # into a parent (merge_small_labels) or dropped before signature building; written to c2l_reference_labels.csv.
+    min_ref_cells: 200
+    merge_small_labels: {}           # e.g. {"Rare epithelial": Secretory}; none is obvious from the crosswalk
+    exclude_labels: [Unknown]        # a mixed bucket has no coherent signature and would absorb signal
+  svg_top: 100
+  nhood_n_rings: 1
+  cellcharter:
+    n_layers: 3
+    cluster_range: [3, 12]
+
+# -----------------------------------------------------------------------------
+# 8. Cell–cell communication (LIANA+; Dimitrov 2024)
+# -----------------------------------------------------------------------------
+ccc:
+  # §3.12: `analysis_group` = de_group with Malignant + CNV-low merged into "Tumour epithelium" (a communication
+  # model cannot separate two groups that differ only by a CNV threshold)
+  groupby: analysis_group
+  de_contrast: paired_tumour_vs_adjacent  # DE contrast feeding differential CCC (one design only)
+  expr_prop: 0.1
+  min_cells: 10
+  resource: consensus
+  tensor_rank: auto
+  tensor_upper_rank: 8  # elbow search ceiling (on the 28-slice paired tensor this costs minutes, not hours)
+  # §3.12: tensor on the paired design — one slice per donor × condition of patients with both tissues
+  tensor_contrast: {case: tumour, control: adjacent_normal}
+  tensor_conditions: [tumour, adjacent_normal]
+  tensor_type_presence: 0.8   # cell types kept only if present in ≥ 80 % of the slices of EACH condition …
+                              # … then slices lacking any kept type are dropped with their partner (§3.12)
+  tensor_min_donor_fraction: 0.75  # if < 75 % of paired patients stay complete, drop the costliest type (greedy)
+  tensor_outer_fraction: 0.9  # LR pairs kept if present in ≥ 90 % of the remaining slices
+  tensor_exclude_labels: [Unknown]
+  spatial_bandwidth: 200
+
+# -----------------------------------------------------------------------------
+# Dashboard serving snapshot (step `export`, docs/ROADMAP.md §6) — presentation only, no analysis
+# -----------------------------------------------------------------------------
+dashboard:
+  run_id: run4
+  run_label: "Run 4 (2026-11-16/17): healthy = cancer-free lung tissue; paired-test calibration"
+  subsample_cells: 50000          # cells with per-cell marker expression (UMAP gene colouring); metadata kept for all
+  marker_top_de_per_group: 15     # + top |Wald stat| genes per DE contrast × cell type
+  marker_top_hvg: 500             # + top highly variable genes
+  visium_top_svg: 200             # spot-level expression for top spatially variable genes (Moran's I)
+  ccc_magnitude_rank_max: 0.01    # per-sample LIANA rows shipped (2.2 M rows / 483 MB otherwise)
+

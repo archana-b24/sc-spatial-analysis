@@ -1,0 +1,22 @@
+# Runs on every commit: `pixi run pre-commit install` once per clone.
+repos:
+  - repo: https://github.com/kynan/nbstripout          # never commit notebook outputs again (v1 issue R6)
+    rev: 0.9.1
+    hooks:
+      - id: nbstripout
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src|scripts|tests)/
+      - id: ruff-format
+        files: ^(src|scripts|tests)/
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files                  # blocks data files sneaking into git
+        args: [--maxkb=2000]
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
